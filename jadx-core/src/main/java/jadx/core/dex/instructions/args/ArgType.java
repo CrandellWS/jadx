@@ -1,21 +1,17 @@
 package jadx.core.dex.instructions.args;
 
 import jadx.core.Consts;
-import jadx.core.clsp.ClspGraph;
+import jadx.core.dex.nodes.DexNode;
+import jadx.core.dex.nodes.parser.SignatureParser;
 import jadx.core.utils.Utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.jetbrains.annotations.Nullable;
 
 public abstract class ArgType {
-	private static final Logger LOG = LoggerFactory.getLogger(ArgType.class);
 
 	public static final ArgType INT = primitive(PrimitiveType.INT);
 	public static final ArgType BOOLEAN = primitive(PrimitiveType.BOOLEAN);
@@ -30,6 +26,7 @@ public abstract class ArgType {
 	public static final ArgType OBJECT = object(Consts.CLASS_OBJECT);
 	public static final ArgType CLASS = object(Consts.CLASS_CLASS);
 	public static final ArgType STRING = object(Consts.CLASS_STRING);
+	public static final ArgType ENUM = object(Consts.CLASS_ENUM);
 	public static final ArgType THROWABLE = object(Consts.CLASS_THROWABLE);
 
 	public static final ArgType UNKNOWN = unknown(PrimitiveType.values());
@@ -48,30 +45,36 @@ public abstract class ArgType {
 
 	protected int hash;
 
-	private static ClspGraph clsp;
-
-	public static void setClsp(ClspGraph clsp) {
-		ArgType.clsp = clsp;
-	}
-
 	private static ArgType primitive(PrimitiveType stype) {
 		return new PrimitiveArg(stype);
 	}
 
 	public static ArgType object(String obj) {
-		return new ObjectArg(obj);
+		return new ObjectType(obj);
 	}
 
 	public static ArgType genericType(String type) {
-		return new GenericTypeArg(type);
+		return new GenericType(type);
+	}
+
+	public static ArgType wildcard() {
+		return new WildcardType(OBJECT, 0);
+	}
+
+	public static ArgType wildcard(ArgType obj, int bound) {
+		return new WildcardType(obj, bound);
 	}
 
 	public static ArgType generic(String sign) {
-		return parseSignature(sign);
+		return new SignatureParser(sign).consumeType();
 	}
 
 	public static ArgType generic(String obj, ArgType[] generics) {
-		return new GenericObjectArg(obj, generics);
+		return new GenericObject(obj, generics);
+	}
+
+	public static ArgType genericInner(ArgType genericType, String innerName, ArgType[] generics) {
+		return new GenericObject((GenericObject) genericType, innerName, generics);
 	}
 
 	public static ArgType array(ArgType vtype) {
@@ -82,14 +85,32 @@ public abstract class ArgType {
 		return new UnknownArg(types);
 	}
 
-	private abstract static class KnownTypeArg extends ArgType {
+	private abstract static class KnownType extends ArgType {
+
+		private static final PrimitiveType[] EMPTY_POSSIBLES = new PrimitiveType[0];
+
 		@Override
 		public boolean isTypeKnown() {
 			return true;
 		}
+
+		@Override
+		public boolean contains(PrimitiveType type) {
+			return getPrimitiveType() == type;
+		}
+
+		@Override
+		public ArgType selectFirst() {
+			return null;
+		}
+
+		@Override
+		public PrimitiveType[] getPossibleTypes() {
+			return EMPTY_POSSIBLES;
+		}
 	}
 
-	private static final class PrimitiveArg extends KnownTypeArg {
+	private static final class PrimitiveArg extends KnownType {
 		private final PrimitiveType type;
 
 		public PrimitiveArg(PrimitiveType type) {
@@ -118,10 +139,10 @@ public abstract class ArgType {
 		}
 	}
 
-	private static class ObjectArg extends KnownTypeArg {
+	private static class ObjectType extends KnownType {
 		private final String object;
 
-		public ObjectArg(String obj) {
+		public ObjectType(String obj) {
 			this.object = Utils.cleanObjectName(obj);
 			this.hash = object.hashCode();
 		}
@@ -143,7 +164,7 @@ public abstract class ArgType {
 
 		@Override
 		boolean internalEquals(Object obj) {
-			return object.equals(((ObjectArg) obj).object);
+			return object.equals(((ObjectType) obj).object);
 		}
 
 		@Override
@@ -152,8 +173,8 @@ public abstract class ArgType {
 		}
 	}
 
-	private static final class GenericTypeArg extends ObjectArg {
-		public GenericTypeArg(String obj) {
+	private static final class GenericType extends ObjectType {
+		public GenericType(String obj) {
 			super(obj);
 		}
 
@@ -163,13 +184,77 @@ public abstract class ArgType {
 		}
 	}
 
-	private static final class GenericObjectArg extends ObjectArg {
-		private final ArgType[] generics;
+	private static final class WildcardType extends ObjectType {
+		private final ArgType type;
+		private final int bounds;
 
-		public GenericObjectArg(String obj, ArgType[] generics) {
+		public WildcardType(ArgType obj, int bound) {
+			super(OBJECT.getObject());
+			this.type = obj;
+			this.bounds = bound;
+		}
+
+		@Override
+		public boolean isGeneric() {
+			return true;
+		}
+
+		@Override
+		public ArgType getWildcardType() {
+			return type;
+		}
+
+		/**
+		 * Return wildcard bounds:
+		 * <ul>
+		 * <li> 1 for upper bound (? extends A) </li>
+		 * <li> 0  no bounds (?) </li>
+		 * <li>-1  for lower bound (? super A) </li>
+		 * </ul>
+		 */
+		@Override
+		public int getWildcardBounds() {
+			return bounds;
+		}
+
+		@Override
+		boolean internalEquals(Object obj) {
+			return super.internalEquals(obj)
+					&& bounds == ((WildcardType) obj).bounds
+					&& type.equals(((WildcardType) obj).type);
+		}
+
+		@Override
+		public String toString() {
+			if (bounds == 0) {
+				return "?";
+			}
+			return "? " + (bounds == -1 ? "super" : "extends") + " " + type;
+		}
+	}
+
+	private static class GenericObject extends ObjectType {
+		private final ArgType[] generics;
+		private final GenericObject outerType;
+
+		public GenericObject(String obj, ArgType[] generics) {
 			super(obj);
+			this.outerType = null;
 			this.generics = generics;
 			this.hash = obj.hashCode() + 31 * Arrays.hashCode(generics);
+		}
+
+		public GenericObject(GenericObject outerType, String innerName, ArgType[] generics) {
+			super(outerType.getObject() + "$" + innerName);
+			this.outerType = outerType;
+			this.generics = generics;
+			this.hash = outerType.hashCode() + 31 * innerName.hashCode()
+					+ 31 * 31 * Arrays.hashCode(generics);
+		}
+
+		@Override
+		public boolean isGeneric() {
+			return true;
 		}
 
 		@Override
@@ -178,9 +263,14 @@ public abstract class ArgType {
 		}
 
 		@Override
+		public ArgType getOuterType() {
+			return outerType;
+		}
+
+		@Override
 		boolean internalEquals(Object obj) {
 			return super.internalEquals(obj)
-					&& Arrays.equals(generics, ((GenericObjectArg) obj).generics);
+					&& Arrays.equals(generics, ((GenericObject) obj).generics);
 		}
 
 		@Override
@@ -189,7 +279,8 @@ public abstract class ArgType {
 		}
 	}
 
-	private static final class ArrayArg extends KnownTypeArg {
+	private static final class ArrayArg extends KnownType {
+		public static final PrimitiveType[] ARRAY_POSSIBLES = new PrimitiveType[]{PrimitiveType.ARRAY};
 		private final ArgType arrayElement;
 
 		public ArrayArg(ArgType arrayElement) {
@@ -213,6 +304,21 @@ public abstract class ArgType {
 		}
 
 		@Override
+		public boolean isTypeKnown() {
+			return arrayElement.isTypeKnown();
+		}
+
+		@Override
+		public ArgType selectFirst() {
+			return array(arrayElement.selectFirst());
+		}
+
+		@Override
+		public PrimitiveType[] getPossibleTypes() {
+			return ARRAY_POSSIBLES;
+		}
+
+		@Override
 		public int getArrayDimension() {
 			return 1 + arrayElement.getArrayDimension();
 		}
@@ -229,7 +335,7 @@ public abstract class ArgType {
 
 		@Override
 		public String toString() {
-			return arrayElement.toString() + "[]";
+			return arrayElement + "[]";
 		}
 	}
 
@@ -264,8 +370,10 @@ public abstract class ArgType {
 		@Override
 		public ArgType selectFirst() {
 			PrimitiveType f = possibleTypes[0];
-			if (f == PrimitiveType.OBJECT || f == PrimitiveType.ARRAY) {
-				return object(Consts.CLASS_OBJECT);
+			if (contains(PrimitiveType.OBJECT)) {
+				return OBJECT;
+			} else if (contains(PrimitiveType.ARRAY)) {
+				return array(OBJECT);
 			} else {
 				return primitive(f);
 			}
@@ -299,10 +407,14 @@ public abstract class ArgType {
 	}
 
 	public String getObject() {
-		throw new UnsupportedOperationException();
+		throw new UnsupportedOperationException("ArgType.getObject(), call class: " + this.getClass());
 	}
 
 	public boolean isObject() {
+		return false;
+	}
+
+	public boolean isGeneric() {
 		return false;
 	}
 
@@ -311,6 +423,21 @@ public abstract class ArgType {
 	}
 
 	public ArgType[] getGenericTypes() {
+		return null;
+	}
+
+	public ArgType getWildcardType() {
+		return null;
+	}
+
+	/**
+	 * @see WildcardType#getWildcardBounds()
+	 */
+	public int getWildcardBounds() {
+		return 0;
+	}
+
+	public ArgType getOuterType() {
 		return null;
 	}
 
@@ -330,43 +457,42 @@ public abstract class ArgType {
 		return this;
 	}
 
-	public boolean contains(PrimitiveType type) {
-		throw new UnsupportedOperationException();
-	}
+	public abstract boolean contains(PrimitiveType type);
 
-	public ArgType selectFirst() {
-		throw new UnsupportedOperationException();
-	}
+	public abstract ArgType selectFirst();
 
-	public PrimitiveType[] getPossibleTypes() {
-		return null;
-	}
+	public abstract PrimitiveType[] getPossibleTypes();
 
-	public static ArgType merge(ArgType a, ArgType b) {
-		if (b == null || a == null) {
+	@Nullable
+	public static ArgType merge(@Nullable DexNode dex, ArgType a, ArgType b) {
+		if (a == null || b == null) {
 			return null;
 		}
 		if (a.equals(b)) {
 			return a;
 		}
-		ArgType res = mergeInternal(a, b);
+		ArgType res = mergeInternal(dex, a, b);
 		if (res == null) {
-			res = mergeInternal(b, a); // swap
+			res = mergeInternal(dex, b, a); // swap
 		}
 		return res;
 	}
 
-	private static ArgType mergeInternal(ArgType a, ArgType b) {
+	private static ArgType mergeInternal(@Nullable DexNode dex, ArgType a, ArgType b) {
 		if (a == UNKNOWN) {
 			return b;
+		}
+		if (a.isArray()) {
+			return mergeArrays(dex, (ArrayArg) a, b);
+		} else if (b.isArray()) {
+			return mergeArrays(dex, (ArrayArg) b, a);
 		}
 		if (!a.isTypeKnown()) {
 			if (b.isTypeKnown()) {
 				if (a.contains(b.getPrimitiveType())) {
 					return b;
-				} else {
-					return null;
 				}
+				return null;
 			} else {
 				// both types unknown
 				List<PrimitiveType> types = new ArrayList<PrimitiveType>();
@@ -375,9 +501,10 @@ public abstract class ArgType {
 						types.add(type);
 					}
 				}
-				if (types.size() == 0) {
+				if (types.isEmpty()) {
 					return null;
-				} else if (types.size() == 1) {
+				}
+				if (types.size() == 1) {
 					PrimitiveType nt = types.get(0);
 					if (nt == PrimitiveType.OBJECT || nt == PrimitiveType.ARRAY) {
 						return unknown(nt);
@@ -400,32 +527,19 @@ public abstract class ArgType {
 				String aObj = a.getObject();
 				String bObj = b.getObject();
 				if (aObj.equals(bObj)) {
-					return (a.getGenericTypes() != null ? a : b);
-				} else if (aObj.equals(Consts.CLASS_OBJECT)) {
-					return b;
-				} else if (bObj.equals(Consts.CLASS_OBJECT)) {
-					return a;
-				} else {
-					// different objects
-					String obj = clsp.getCommonAncestor(aObj, bObj);
-					return (obj == null ? null : object(obj));
+					return a.getGenericTypes() != null ? a : b;
 				}
-			}
-			if (a.isArray()) {
-				if (b.isArray()) {
-					ArgType ea = a.getArrayElement();
-					ArgType eb = b.getArrayElement();
-					if (ea.isPrimitive() && eb.isPrimitive()) {
-						return OBJECT;
-					} else {
-						ArgType res = merge(ea, eb);
-						return (res == null ? null : ArgType.array(res));
-					}
-				} else if (b.equals(OBJECT)) {
-					return OBJECT;
-				} else {
+				if (aObj.equals(Consts.CLASS_OBJECT)) {
+					return b;
+				}
+				if (bObj.equals(Consts.CLASS_OBJECT)) {
+					return a;
+				}
+				if (dex == null) {
 					return null;
 				}
+				String obj = dex.root().getClsp().getCommonAncestor(aObj, bObj);
+				return obj == null ? null : object(obj);
 			}
 			if (a.isPrimitive() && b.isPrimitive() && a.getRegCount() == b.getRegCount()) {
 				return primitive(PrimitiveType.getSmaller(a.getPrimitiveType(), b.getPrimitiveType()));
@@ -434,15 +548,44 @@ public abstract class ArgType {
 		return null;
 	}
 
-	public static boolean isCastNeeded(ArgType from, ArgType to) {
+	private static ArgType mergeArrays(DexNode dex, ArrayArg array, ArgType b) {
+		if (b.isArray()) {
+			ArgType ea = array.getArrayElement();
+			ArgType eb = b.getArrayElement();
+			if (ea.isPrimitive() && eb.isPrimitive()) {
+				return OBJECT;
+			}
+			ArgType res = merge(dex, ea, eb);
+			return res == null ? null : array(res);
+		}
+		if (b.contains(PrimitiveType.ARRAY)) {
+			return array;
+		}
+		if (b.equals(OBJECT)) {
+			return OBJECT;
+		}
+		return null;
+	}
+
+	public static boolean isCastNeeded(DexNode dex, ArgType from, ArgType to) {
 		if (from.equals(to)) {
 			return false;
 		}
 		if (from.isObject() && to.isObject()
-				&& clsp.isImplements(from.getObject(), to.getObject())) {
+				&& dex.root().getClsp().isImplements(from.getObject(), to.getObject())) {
 			return false;
 		}
 		return true;
+	}
+
+	public static boolean isInstanceOf(DexNode dex, ArgType type, ArgType of) {
+		if (type.equals(of)) {
+			return true;
+		}
+		if (!type.isObject() || !of.isObject()) {
+			return false;
+		}
+		return dex.root().getClsp().isImplements(type.getObject(), of.getObject());
 	}
 
 	public static ArgType parse(String type) {
@@ -459,148 +602,7 @@ public abstract class ArgType {
 		}
 	}
 
-	public static ArgType parseSignature(String sign) {
-		int b = sign.indexOf('<');
-		if (b == -1) {
-			return parse(sign);
-		}
-		if (sign.charAt(0) == '[') {
-			return array(parseSignature(sign.substring(1)));
-		}
-		String obj = sign.substring(0, b) + ";";
-		String genericsStr = sign.substring(b + 1, sign.length() - 2);
-		List<ArgType> generics = parseSignatureList(genericsStr);
-		if (generics != null) {
-			return generic(obj, generics.toArray(new ArgType[generics.size()]));
-		} else {
-			return object(obj);
-		}
-	}
-
-	public static List<ArgType> parseSignatureList(String str) {
-		try {
-			return parseSignatureListInner(str, true);
-		} catch (Throwable e) {
-			LOG.warn("Signature parse exception: {}", str, e);
-			return null;
-		}
-	}
-
-	private static List<ArgType> parseSignatureListInner(String str, boolean parsePrimitives) {
-		if (str.isEmpty()) {
-			return Collections.emptyList();
-		}
-		if (str.equals("*")) {
-			return Arrays.asList(UNKNOWN);
-		}
-		List<ArgType> signs = new ArrayList<ArgType>(3);
-		int obj = 0;
-		int objStart = 0;
-		int gen = 0;
-		int arr = 0;
-
-		int pos = 0;
-		ArgType type = null;
-		while (pos < str.length()) {
-			char c = str.charAt(pos);
-			switch (c) {
-				case 'L':
-				case 'T':
-					if (obj == 0 && gen == 0) {
-						obj++;
-						objStart = pos;
-					}
-					break;
-
-				case ';':
-					if (obj == 1 && gen == 0) {
-						obj--;
-						String o = str.substring(objStart, pos + 1);
-						type = parseSignature(o);
-					}
-					break;
-
-				case ':': // generic types map separator
-					if (gen == 0) {
-						obj = 0;
-						String o = str.substring(objStart, pos);
-						if (o.length() > 0) {
-							type = genericType(o);
-						}
-					}
-					break;
-
-				case '<':
-					gen++;
-					break;
-				case '>':
-					gen--;
-					break;
-
-				case '[':
-					if (obj == 0 && gen == 0) {
-						arr++;
-					}
-					break;
-
-				default:
-					if (parsePrimitives && obj == 0 && gen == 0) {
-						type = parse(c);
-					}
-					break;
-			}
-
-			if (type != null) {
-				if (arr == 0) {
-					signs.add(type);
-				} else {
-					for (int i = 0; i < arr; i++) {
-						type = array(type);
-					}
-					signs.add(type);
-					arr = 0;
-				}
-				type = null;
-				objStart = pos + 1;
-			}
-			pos++;
-		}
-		return signs;
-	}
-
-	public static Map<ArgType, List<ArgType>> parseGenericMap(String gen) {
-		try {
-			Map<ArgType, List<ArgType>> genericMap = null;
-			List<ArgType> genTypes = parseSignatureListInner(gen, false);
-			if (genTypes != null) {
-				genericMap = new LinkedHashMap<ArgType, List<ArgType>>(2);
-				ArgType prev = null;
-				List<ArgType> genList = new ArrayList<ArgType>(2);
-				for (ArgType arg : genTypes) {
-					if (arg.isGenericType()) {
-						if (prev != null) {
-							genericMap.put(prev, genList);
-							genList = new ArrayList<ArgType>();
-						}
-						prev = arg;
-					} else {
-						if (!arg.getObject().equals(Consts.CLASS_OBJECT)) {
-							genList.add(arg);
-						}
-					}
-				}
-				if (prev != null) {
-					genericMap.put(prev, genList);
-				}
-			}
-			return genericMap;
-		} catch (Throwable e) {
-			LOG.warn("Generic map parse exception: {}", gen, e);
-			return null;
-		}
-	}
-
-	private static ArgType parse(char f) {
+	public static ArgType parse(char f) {
 		switch (f) {
 			case 'Z':
 				return BOOLEAN;

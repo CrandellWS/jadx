@@ -1,6 +1,5 @@
 package jadx.core.dex.regions;
 
-import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
 
@@ -21,18 +20,35 @@ public final class Region extends AbstractRegion {
 		return blocks;
 	}
 
+	public void add(IContainer region) {
+		if (region instanceof AbstractRegion) {
+			((AbstractRegion) region).setParent(this);
+		}
+		blocks.add(region);
+	}
+
 	@Override
-	public String toString() {
+	public boolean replaceSubBlock(IContainer oldBlock, IContainer newBlock) {
+		int i = blocks.indexOf(oldBlock);
+		if (i != -1) {
+			blocks.set(i, newBlock);
+			return true;
+		}
+		return false;
+	}
+
+	@Override
+	public String baseString() {
 		StringBuilder sb = new StringBuilder();
-		sb.append("R:");
 		sb.append(blocks.size());
-		if (blocks.size() != 0) {
-			for (IContainer cont : blocks) {
-				if (cont instanceof BlockNode)
-					sb.append(((BlockNode) cont).getId());
-			}
+		for (IContainer cont : blocks) {
+			sb.append(cont.baseString());
 		}
 		return sb.toString();
 	}
 
+	@Override
+	public String toString() {
+		return "R:" + baseString();
+	}
 }

@@ -7,8 +7,8 @@ import jadx.core.utils.Utils;
 
 import java.util.List;
 
-import com.android.dx.io.MethodId;
-import com.android.dx.io.ProtoId;
+import com.android.dex.MethodId;
+import com.android.dex.ProtoId;
 
 public final class MethodInfo {
 
@@ -17,28 +17,43 @@ public final class MethodInfo {
 	private final List<ArgType> args;
 	private final ClassInfo declClass;
 	private final String shortId;
-
-	public static MethodInfo fromDex(DexNode dex, int mthIndex) {
-		return new MethodInfo(dex, mthIndex);
-	}
+	private String alias;
+	private boolean aliasFromPreset;
 
 	private MethodInfo(DexNode dex, int mthIndex) {
 		MethodId mthId = dex.getMethodId(mthIndex);
 		name = dex.getString(mthId.getNameIndex());
+		alias = name;
+		aliasFromPreset = false;
 		declClass = ClassInfo.fromDex(dex, mthId.getDeclaringClassIndex());
 
 		ProtoId proto = dex.getProtoId(mthId.getProtoIndex());
 		retType = dex.getType(proto.getReturnTypeIndex());
 		args = dex.readParamList(proto.getParametersOffset());
+		shortId = makeSignature(true);
+	}
 
-		StringBuilder strArg = new StringBuilder();
-		strArg.append('(');
-		for (ArgType arg : args)
-			strArg.append(TypeGen.signature(arg));
-		strArg.append(')');
-		// strArg.append(TypeGen.signature(retType));
+	public static MethodInfo fromDex(DexNode dex, int mthIndex) {
+		MethodInfo mth = dex.getInfoStorage().getMethod(mthIndex);
+		if (mth != null) {
+			return mth;
+		}
+		mth = new MethodInfo(dex, mthIndex);
+		return dex.getInfoStorage().putMethod(mthIndex, mth);
+	}
 
-		shortId = name + strArg;
+	public String makeSignature(boolean includeRetType) {
+		StringBuilder signature = new StringBuilder();
+		signature.append(name);
+		signature.append('(');
+		for (ArgType arg : args) {
+			signature.append(TypeGen.signature(arg));
+		}
+		signature.append(')');
+		if (includeRetType) {
+			signature.append(TypeGen.signature(retType));
+		}
+		return signature.toString();
 	}
 
 	public String getName() {
@@ -84,32 +99,52 @@ public final class MethodInfo {
 		return name.equals("<clinit>");
 	}
 
+	public String getAlias() {
+		return alias;
+	}
+
+	public void setAlias(String alias) {
+		this.alias = alias;
+	}
+
+	public boolean isRenamed() {
+		return !name.equals(alias);
+	}
+
+	public boolean isAliasFromPreset() {
+		return aliasFromPreset;
+	}
+
+	public void setAliasFromPreset(boolean value) {
+		aliasFromPreset = value;
+	}
+
 	@Override
 	public int hashCode() {
-		final int prime = 31;
-		int result = 1;
-		result = prime * result + declClass.hashCode();
-		result = prime * result + retType.hashCode();
-		result = prime * result + shortId.hashCode();
+		int result = declClass.hashCode();
+		result = 31 * result + retType.hashCode();
+		result = 31 * result + shortId.hashCode();
 		return result;
 	}
 
 	@Override
 	public boolean equals(Object obj) {
-		if (this == obj) return true;
-		if (obj == null) return false;
-		if (getClass() != obj.getClass()) return false;
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof MethodInfo)) {
+			return false;
+		}
 		MethodInfo other = (MethodInfo) obj;
-		if (!shortId.equals(other.shortId)) return false;
-		if (!retType.equals(other.retType)) return false;
-		if (!declClass.equals(other.declClass)) return false;
-		return true;
+		return shortId.equals(other.shortId)
+				&& retType.equals(other.retType)
+				&& declClass.equals(other.declClass);
 	}
 
 	@Override
 	public String toString() {
-		return retType + " " + declClass.getFullName() + "." + name
-				+ "(" + Utils.listToString(args) + ")";
+		return declClass.getFullName() + "." + name
+				+ "(" + Utils.listToString(args) + "):" + retType;
 	}
 
 }

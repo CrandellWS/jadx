@@ -16,7 +16,7 @@ public enum PrimitiveType {
 	private final String shortName;
 	private final String longName;
 
-	private PrimitiveType(String shortName, String longName) {
+	PrimitiveType(String shortName, String longName) {
 		this.shortName = shortName;
 		this.longName = longName;
 	}
@@ -30,17 +30,19 @@ public enum PrimitiveType {
 	}
 
 	public static PrimitiveType getWidest(PrimitiveType a, PrimitiveType b) {
-		if (a.ordinal() > b.ordinal())
+		if (a.ordinal() > b.ordinal()) {
 			return a;
-		else
+		} else {
 			return b;
+		}
 	}
 
 	public static PrimitiveType getSmaller(PrimitiveType a, PrimitiveType b) {
-		if (a.ordinal() < b.ordinal())
+		if (a.ordinal() < b.ordinal()) {
 			return a;
-		else
+		} else {
 			return b;
+		}
 	}
 
 	@Override

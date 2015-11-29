@@ -3,8 +3,10 @@ package jadx.core.dex.visitors.regions;
 import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.IRegion;
 import jadx.core.dex.nodes.MethodNode;
+import jadx.core.utils.exceptions.JadxOverflowException;
 
 import java.util.ArrayDeque;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
@@ -16,9 +18,12 @@ final class RegionStack {
 	private static final Logger LOG = LoggerFactory.getLogger(RegionStack.class);
 	private static final boolean DEBUG = false;
 
+	private static final int REGIONS_STACK_LIMIT = 1000;
+
 	static {
-		if (DEBUG)
+		if (DEBUG) {
 			LOG.debug("Debug enabled for {}", RegionStack.class);
+		}
 	}
 
 	private static final class State {
@@ -47,27 +52,30 @@ final class RegionStack {
 	private State curState;
 
 	public RegionStack(MethodNode mth) {
-		if (DEBUG)
+		if (DEBUG) {
 			LOG.debug("New RegionStack: {}", mth);
+		}
 		this.stack = new ArrayDeque<State>();
 		this.curState = new State();
 	}
 
 	public void push(IRegion region) {
 		stack.push(curState);
-		if (stack.size() > 1000)
-			throw new StackOverflowError("Deep code hierarchy");
-
+		if (stack.size() > REGIONS_STACK_LIMIT) {
+			throw new JadxOverflowException("Regions stack size limit reached");
+		}
 		curState = curState.copy();
 		curState.region = region;
-		if (DEBUG)
+		if (DEBUG) {
 			LOG.debug("Stack push: {}: {}", size(), curState);
+		}
 	}
 
 	public void pop() {
 		curState = stack.pop();
-		if (DEBUG)
+		if (DEBUG) {
 			LOG.debug("Stack  pop: {}: {}", size(), curState);
+		}
 	}
 
 	/**
@@ -76,8 +84,21 @@ final class RegionStack {
 	 * @param exit boundary node, null will be ignored
 	 */
 	public void addExit(BlockNode exit) {
-		if (exit != null)
+		if (exit != null) {
 			curState.exits.add(exit);
+		}
+	}
+
+	public void addExits(Collection<BlockNode> exits) {
+		for (BlockNode exit : exits) {
+			addExit(exit);
+		}
+	}
+
+	public void removeExit(BlockNode exit) {
+		if (exit != null) {
+			curState.exits.remove(exit);
+		}
 	}
 
 	public boolean containsExit(BlockNode exit) {

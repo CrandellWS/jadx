@@ -5,6 +5,9 @@ import jadx.core.utils.exceptions.JadxRuntimeException;
 
 public final class LiteralArg extends InsnArg {
 
+	public static final LiteralArg TRUE = new LiteralArg(1, ArgType.BOOLEAN);
+	public static final LiteralArg FALSE = new LiteralArg(0, ArgType.BOOLEAN);
+
 	private final long literal;
 
 	public LiteralArg(long value, ArgType type) {
@@ -14,14 +17,14 @@ public final class LiteralArg extends InsnArg {
 			} else if (!type.isTypeKnown()
 					&& !type.contains(PrimitiveType.LONG)
 					&& !type.contains(PrimitiveType.DOUBLE)) {
-				ArgType m = ArgType.merge(type, ArgType.NARROW_NUMBERS);
+				ArgType m = ArgType.merge(null, type, ArgType.NARROW_NUMBERS);
 				if (m != null) {
 					type = m;
 				}
 			}
 		}
 		this.literal = value;
-		this.typedVar = new TypedVar(type);
+		this.type = type;
 	}
 
 	public long getLiteral() {
@@ -34,21 +37,42 @@ public final class LiteralArg extends InsnArg {
 	}
 
 	public boolean isInteger() {
-		PrimitiveType type = typedVar.getType().getPrimitiveType();
-		return (type == PrimitiveType.INT
+		PrimitiveType type = this.type.getPrimitiveType();
+		return type == PrimitiveType.INT
 				|| type == PrimitiveType.BYTE
 				|| type == PrimitiveType.CHAR
 				|| type == PrimitiveType.SHORT
-				|| type == PrimitiveType.LONG);
+				|| type == PrimitiveType.LONG;
+	}
+
+	@Override
+	public int hashCode() {
+		return (int) (literal ^ literal >>> 32) + 31 * getType().hashCode();
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (o == null || getClass() != o.getClass()) {
+			return false;
+		}
+		LiteralArg that = (LiteralArg) o;
+		return literal == that.literal && getType().equals(that.getType());
 	}
 
 	@Override
 	public String toString() {
 		try {
-			return "(" + TypeGen.literalToString(literal, getType()) + " " + typedVar + ")";
+			String value = TypeGen.literalToString(literal, getType());
+			if (getType().equals(ArgType.BOOLEAN) && (value.equals("true") || value.equals("false"))) {
+				return value;
+			}
+			return "(" + value + " " + type + ")";
 		} catch (JadxRuntimeException ex) {
 			// can't convert literal to string
-			return "(" + literal + " " + typedVar + ")";
+			return "(" + literal + " " + type + ")";
 		}
 	}
 }

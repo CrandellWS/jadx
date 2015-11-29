@@ -2,7 +2,9 @@ package jadx.api;
 
 import java.util.List;
 
-public final class JavaPackage implements Comparable<JavaPackage> {
+import org.jetbrains.annotations.NotNull;
+
+public final class JavaPackage implements JavaNode, Comparable<JavaPackage> {
 	private final String name;
 	private final List<JavaClass> classes;
 
@@ -11,7 +13,14 @@ public final class JavaPackage implements Comparable<JavaPackage> {
 		this.classes = classes;
 	}
 
+	@Override
 	public String getName() {
+		return name;
+	}
+
+	@Override
+	public String getFullName() {
+		// TODO: store full package name
 		return name;
 	}
 
@@ -20,17 +29,35 @@ public final class JavaPackage implements Comparable<JavaPackage> {
 	}
 
 	@Override
-	public int compareTo(JavaPackage o) {
+	public JavaClass getDeclaringClass() {
+		return null;
+	}
+
+	@Override
+	public JavaClass getTopParentClass() {
+		return null;
+	}
+
+	@Override
+	public int getDecompiledLine() {
+		return 0;
+	}
+
+	@Override
+	public int compareTo(@NotNull JavaPackage o) {
 		return name.compareTo(o.name);
 	}
 
 	@Override
 	public boolean equals(Object o) {
-		if (this == o) return true;
-		if (o == null || getClass() != o.getClass()) return false;
+		if (this == o) {
+			return true;
+		}
+		if (o == null || getClass() != o.getClass()) {
+			return false;
+		}
 		JavaPackage that = (JavaPackage) o;
-		if (!name.equals(that.name)) return false;
-		return true;
+		return name.equals(that.name);
 	}
 
 	@Override

@@ -37,13 +37,28 @@ public class SwitchNode extends InsnNode {
 	}
 
 	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof SwitchNode) || !super.isSame(obj)) {
+			return false;
+		}
+		SwitchNode other = (SwitchNode) obj;
+		return def == other.def
+				&& Arrays.equals(keys, other.keys)
+				&& Arrays.equals(targets, other.targets);
+	}
+
+	@Override
 	public String toString() {
 		StringBuilder targ = new StringBuilder();
 		targ.append('[');
 		for (int i = 0; i < targets.length; i++) {
 			targ.append(InsnUtils.formatOffset(targets[i]));
-			if (i < targets.length - 1)
+			if (i < targets.length - 1) {
 				targ.append(", ");
+			}
 		}
 		targ.append(']');
 		return super.toString() + " k:" + Arrays.toString(keys) + " t:" + targ;

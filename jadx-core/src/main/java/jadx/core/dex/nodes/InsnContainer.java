@@ -6,9 +6,9 @@ import java.util.List;
 
 public class InsnContainer extends AttrNode implements IBlock {
 
-	private List<InsnNode> insns;
+	private final List<InsnNode> insns;
 
-	public void setInstructions(List<InsnNode> insns) {
+	public InsnContainer(List<InsnNode> insns) {
 		this.insns = insns;
 	}
 
@@ -17,4 +17,13 @@ public class InsnContainer extends AttrNode implements IBlock {
 		return insns;
 	}
 
+	@Override
+	public String baseString() {
+		return Integer.toString(insns.size());
+	}
+
+	@Override
+	public String toString() {
+		return "InsnContainer:" + insns.size();
+	}
 }

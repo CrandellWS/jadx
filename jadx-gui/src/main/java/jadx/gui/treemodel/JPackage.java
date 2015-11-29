@@ -9,14 +9,16 @@ import javax.swing.ImageIcon;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.jetbrains.annotations.NotNull;
+
 public class JPackage extends JNode implements Comparable<JPackage> {
 	private static final long serialVersionUID = -4120718634156839804L;
 
 	private static final ImageIcon PACKAGE_ICON = Utils.openIcon("package_obj");
 
 	private String name;
-	private List<JClass> classes;
-	private List<JPackage> innerPackages = new ArrayList<JPackage>(1);
+	private final List<JClass> classes;
+	private final List<JPackage> innerPackages = new ArrayList<JPackage>(1);
 
 	public JPackage(JavaPackage pkg) {
 		this.name = pkg.getName();
@@ -25,7 +27,7 @@ public class JPackage extends JNode implements Comparable<JPackage> {
 		for (JavaClass javaClass : javaClasses) {
 			classes.add(new JClass(javaClass));
 		}
-		updateChilds();
+		update();
 	}
 
 	public JPackage(String name) {
@@ -33,19 +35,19 @@ public class JPackage extends JNode implements Comparable<JPackage> {
 		this.classes = new ArrayList<JClass>(1);
 	}
 
-	@Override
-	public void updateChilds() {
+	public final void update() {
 		removeAllChildren();
 		for (JPackage pkg : innerPackages) {
-			pkg.updateChilds();
+			pkg.update();
 			add(pkg);
 		}
 		for (JClass cls : classes) {
-			cls.updateChilds();
+			cls.update();
 			add(cls);
 		}
 	}
 
+	@Override
 	public String getName() {
 		return name;
 	}
@@ -78,17 +80,19 @@ public class JPackage extends JNode implements Comparable<JPackage> {
 	}
 
 	@Override
-	public int compareTo(JPackage o) {
+	public int compareTo(@NotNull JPackage o) {
 		return name.compareTo(o.name);
 	}
 
 	@Override
 	public boolean equals(Object o) {
-		if (this == o) return true;
-		if (o == null || getClass() != o.getClass()) return false;
-		JPackage jPackage = (JPackage) o;
-		if (!name.equals(jPackage.name)) return false;
-		return true;
+		if (this == o) {
+			return true;
+		}
+		if (o == null || getClass() != o.getClass()) {
+			return false;
+		}
+		return name.equals(((JPackage) o).name);
 	}
 
 	@Override
@@ -97,7 +101,12 @@ public class JPackage extends JNode implements Comparable<JPackage> {
 	}
 
 	@Override
-	public String toString() {
+	public String makeString() {
+		return name;
+	}
+
+	@Override
+	public String makeLongString() {
 		return name;
 	}
 }

@@ -1,5 +1,6 @@
 package jadx.core.dex.instructions;
 
+import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.instructions.args.RegisterArg;
@@ -39,7 +40,6 @@ public class ArithNode extends InsnNode {
 				addReg(insn, 2, type);
 			}
 		}
-		assert getArgsCount() == 2;
 	}
 
 	public ArithNode(ArithOp op, RegisterArg res, InsnArg a, InsnArg b) {
@@ -51,14 +51,24 @@ public class ArithNode extends InsnNode {
 	}
 
 	public ArithNode(ArithOp op, RegisterArg res, InsnArg a) {
-		super(InsnType.ARITH, 1);
-		this.op = op;
-		setResult(res);
-		addArg(a);
+		this(op, res, res, a);
+		add(AFlag.ARITH_ONEARG);
 	}
 
 	public ArithOp getOp() {
 		return op;
+	}
+
+	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof ArithNode) || !super.isSame(obj)) {
+			return false;
+		}
+		ArithNode other = (ArithNode) obj;
+		return op == other.op;
 	}
 
 	@Override
@@ -68,7 +78,7 @@ public class ArithNode extends InsnNode {
 				+ getResult() + " = "
 				+ getArg(0) + " "
 				+ op.getSymbol() + " "
-				+ (getArgsCount() == 2 ? getArg(1) : "");
+				+ getArg(1);
 	}
 
 }

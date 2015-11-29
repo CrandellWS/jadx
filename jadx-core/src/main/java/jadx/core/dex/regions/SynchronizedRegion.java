@@ -4,21 +4,27 @@ import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
 import jadx.core.dex.nodes.InsnNode;
 
+import java.util.LinkedList;
 import java.util.List;
 
 public final class SynchronizedRegion extends AbstractRegion {
 
-	private final InsnNode insn;
+	private final InsnNode enterInsn;
+	private final List<InsnNode> exitInsns = new LinkedList<InsnNode>();
 	private final Region region;
 
 	public SynchronizedRegion(IRegion parent, InsnNode insn) {
 		super(parent);
-		this.insn = insn;
+		this.enterInsn = insn;
 		this.region = new Region(this);
 	}
 
-	public InsnNode getInsn() {
-		return insn;
+	public InsnNode getEnterInsn() {
+		return enterInsn;
+	}
+
+	public List<InsnNode> getExitInsns() {
+		return exitInsns;
 	}
 
 	public Region getRegion() {
@@ -28,6 +34,11 @@ public final class SynchronizedRegion extends AbstractRegion {
 	@Override
 	public List<IContainer> getSubBlocks() {
 		return region.getSubBlocks();
+	}
+
+	@Override
+	public String baseString() {
+		return Integer.toHexString(enterInsn.getOffset());
 	}
 
 	@Override

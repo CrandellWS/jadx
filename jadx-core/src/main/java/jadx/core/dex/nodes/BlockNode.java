@@ -1,14 +1,18 @@
 package jadx.core.dex.nodes;
 
+import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.AttrNode;
-import jadx.core.dex.attributes.AttributeType;
-import jadx.core.dex.attributes.BlockRegState;
-import jadx.core.dex.attributes.LoopAttr;
+import jadx.core.dex.attributes.nodes.IgnoreEdgeAttr;
+import jadx.core.dex.attributes.nodes.LoopInfo;
+import jadx.core.utils.BlockUtils;
+import jadx.core.utils.EmptyBitSet;
 import jadx.core.utils.InsnUtils;
 
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 
 public class BlockNode extends AttrNode implements IBlock {
@@ -21,12 +25,14 @@ public class BlockNode extends AttrNode implements IBlock {
 	private List<BlockNode> successors = new ArrayList<BlockNode>(1);
 	private List<BlockNode> cleanSuccessors;
 
-	private BitSet doms; // all dominators
-	private BlockNode idom; // immediate dominator
-	private final List<BlockNode> dominatesOn = new ArrayList<BlockNode>(1);
-
-	private BlockRegState startState;
-	private BlockRegState endState;
+	// all dominators
+	private BitSet doms = EmptyBitSet.EMPTY;
+	// dominance frontier
+	private BitSet domFrontier;
+	// immediate dominator
+	private BlockNode idom;
+	// blocks on which dominates this block
+	private List<BlockNode> dominatesOn = Collections.emptyList();
 
 	public BlockNode(int id, int offset) {
 		this.id = id;
@@ -58,9 +64,17 @@ public class BlockNode extends AttrNode implements IBlock {
 	}
 
 	public void lock() {
-		cleanSuccessors = Collections.unmodifiableList(cleanSuccessors);
-		successors = Collections.unmodifiableList(successors);
-		predecessors = Collections.unmodifiableList(predecessors);
+		cleanSuccessors = lockList(cleanSuccessors);
+		successors = lockList(successors);
+		predecessors = lockList(predecessors);
+		dominatesOn = lockList(dominatesOn);
+	}
+
+	List<BlockNode> lockList(List<BlockNode> list) {
+		if (list.isEmpty()) {
+			return Collections.emptyList();
+		}
+		return Collections.unmodifiableList(list);
 	}
 
 	/**
@@ -68,24 +82,31 @@ public class BlockNode extends AttrNode implements IBlock {
 	 */
 	private static List<BlockNode> cleanSuccessors(BlockNode block) {
 		List<BlockNode> sucList = block.getSuccessors();
-		List<BlockNode> nodes = new ArrayList<BlockNode>(sucList.size());
-		LoopAttr loop = (LoopAttr) block.getAttributes().get(AttributeType.LOOP);
-		if (loop == null) {
-			for (BlockNode b : sucList) {
-				if (!b.getAttributes().contains(AttributeType.EXC_HANDLER))
-					nodes.add(b);
-			}
-		} else {
-			for (BlockNode b : sucList) {
-				if (!b.getAttributes().contains(AttributeType.EXC_HANDLER)) {
-					// don't follow back edge
-					if (loop.getStart() == b && loop.getEnd() == block)
-						continue;
-					nodes.add(b);
-				}
+		if (sucList.isEmpty()) {
+			return sucList;
+		}
+		List<BlockNode> toRemove = new LinkedList<BlockNode>();
+		for (BlockNode b : sucList) {
+			if (BlockUtils.isBlockMustBeCleared(b)) {
+				toRemove.add(b);
 			}
 		}
-		return (nodes.size() == sucList.size() ? sucList : nodes);
+		if (block.contains(AFlag.LOOP_END)) {
+			List<LoopInfo> loops = block.getAll(AType.LOOP);
+			for (LoopInfo loop : loops) {
+				toRemove.add(loop.getStart());
+			}
+		}
+		IgnoreEdgeAttr ignoreEdgeAttr = block.get(AType.IGNORE_EDGE);
+		if (ignoreEdgeAttr != null) {
+			toRemove.addAll(ignoreEdgeAttr.getBlocks());
+		}
+		if (toRemove.isEmpty()) {
+			return sucList;
+		}
+		List<BlockNode> result = new ArrayList<BlockNode>(sucList);
+		result.removeAll(toRemove);
+		return result;
 	}
 
 	@Override
@@ -115,6 +136,14 @@ public class BlockNode extends AttrNode implements IBlock {
 		this.doms = doms;
 	}
 
+	public BitSet getDomFrontier() {
+		return domFrontier;
+	}
+
+	public void setDomFrontier(BitSet domFrontier) {
+		this.domFrontier = domFrontier;
+	}
+
 	/**
 	 * Immediate dominator
 	 */
@@ -130,37 +159,41 @@ public class BlockNode extends AttrNode implements IBlock {
 		return dominatesOn;
 	}
 
-	public BlockRegState getStartState() {
-		return startState;
+	public void addDominatesOn(BlockNode block) {
+		if (dominatesOn.isEmpty()) {
+			dominatesOn = new LinkedList<BlockNode>();
+		}
+		dominatesOn.add(block);
 	}
 
-	public void setStartState(BlockRegState startState) {
-		this.startState = startState;
+	public boolean isSynthetic() {
+		return contains(AFlag.SYNTHETIC);
 	}
 
-	public BlockRegState getEndState() {
-		return endState;
-	}
-
-	public void setEndState(BlockRegState endState) {
-		this.endState = endState;
+	public boolean isReturnBlock() {
+		return contains(AFlag.RETURN);
 	}
 
 	@Override
 	public int hashCode() {
-		return id; // TODO id can change during reindex
+		return startOffset;
 	}
 
 	@Override
 	public boolean equals(Object obj) {
-		if (this == obj) return true;
-		if (obj == null) return false;
-		if (hashCode() != obj.hashCode()) return false;
-		if (!(obj instanceof BlockNode)) return false;
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof BlockNode)) {
+			return false;
+		}
 		BlockNode other = (BlockNode) obj;
-		if (id != other.id) return false;
-		if (startOffset != other.startOffset) return false;
-		return true;
+		return id == other.id && startOffset == other.startOffset;
+	}
+
+	@Override
+	public String baseString() {
+		return Integer.toString(id);
 	}
 
 	@Override

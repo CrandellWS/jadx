@@ -1,7 +1,6 @@
 package jadx.cli;
 
-import jadx.api.Decompiler;
-import jadx.core.utils.ErrorsCounter;
+import jadx.api.JadxDecompiler;
 import jadx.core.utils.exceptions.JadxException;
 
 import java.io.File;
@@ -12,39 +11,39 @@ import org.slf4j.LoggerFactory;
 public class JadxCLI {
 	private static final Logger LOG = LoggerFactory.getLogger(JadxCLI.class);
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws JadxException {
 		try {
-			JadxCLIArgs jadxArgs = new JadxCLIArgs(args);
-			checkArgs(jadxArgs);
-			processAndSave(jadxArgs);
-		} catch (Exception e) {
-			LOG.error(e.getMessage());
+			JadxCLIArgs jadxArgs = new JadxCLIArgs();
+			if (processArgs(jadxArgs, args)) {
+				processAndSave(jadxArgs);
+			}
+		} catch (Throwable e) {
+			LOG.error("jadx error: {}", e.getMessage(), e);
 			System.exit(1);
 		}
 	}
 
-	private static void processAndSave(JadxCLIArgs jadxArgs) {
-		try {
-			Decompiler jadx = new Decompiler(jadxArgs);
-			jadx.loadFiles(jadxArgs.getInput());
-			jadx.setOutputDir(jadxArgs.getOutDir());
-			jadx.save();
+	static void processAndSave(JadxCLIArgs jadxArgs) throws JadxException {
+		JadxDecompiler jadx = new JadxDecompiler(jadxArgs);
+		jadx.setOutputDir(jadxArgs.getOutDir());
+		jadx.loadFiles(jadxArgs.getInput());
+		jadx.save();
+		if (jadx.getErrorsCount() != 0) {
+			jadx.printErrorsReport();
+			LOG.error("finished with errors");
+		} else {
 			LOG.info("done");
-		} catch (Throwable e) {
-			LOG.error("jadx error:", e);
 		}
-		int errorsCount = ErrorsCounter.getErrorCount();
-		if (errorsCount != 0) {
-			ErrorsCounter.printReport();
-		}
-		System.exit(errorsCount);
 	}
 
-	private static void checkArgs(JadxCLIArgs jadxArgs) throws JadxException {
+	static boolean processArgs(JadxCLIArgs jadxArgs, String[] args) throws JadxException {
+		if (!jadxArgs.processArgs(args)) {
+			return false;
+		}
 		if (jadxArgs.getInput().isEmpty()) {
 			LOG.error("Please specify input file");
 			jadxArgs.printUsage();
-			System.exit(1);
+			return false;
 		}
 		File outputDir = jadxArgs.getOutDir();
 		if (outputDir == null) {
@@ -57,12 +56,13 @@ public class JadxCLI {
 			} else {
 				outDirName = name + "-jadx-out";
 			}
-			LOG.info("output directory: " + outDirName);
+			LOG.info("output directory: {}", outDirName);
 			outputDir = new File(outDirName);
 			jadxArgs.setOutputDir(outputDir);
 		}
 		if (outputDir.exists() && !outputDir.isDirectory()) {
 			throw new JadxException("Output directory exists as file " + outputDir);
 		}
+		return true;
 	}
 }

@@ -8,6 +8,12 @@ import java.util.List;
 
 public final class InsnList implements Iterable<InsnNode> {
 
+	private final List<InsnNode> list;
+
+	public InsnList(List<InsnNode> list) {
+		this.list = list;
+	}
+
 	public static void remove(List<InsnNode> list, InsnNode insn) {
 		for (Iterator<InsnNode> iterator = list.iterator(); iterator.hasNext(); ) {
 			InsnNode next = iterator.next();
@@ -23,20 +29,13 @@ public final class InsnList implements Iterable<InsnNode> {
 	}
 
 	public static int getIndex(List<InsnNode> list, InsnNode insn) {
-		int i = 0;
-		for (InsnNode curObj : list) {
-			if (curObj == insn) {
+		int size = list.size();
+		for (int i = 0; i < size; i++) {
+			if (list.get(i) == insn) {
 				return i;
 			}
-			i++;
 		}
 		return -1;
-	}
-
-	private final List<InsnNode> list;
-
-	public InsnList(List<InsnNode> list) {
-		this.list = list;
 	}
 
 	public int getIndex(InsnNode insn) {

@@ -19,8 +19,9 @@ public class InvokeNode extends InsnNode {
 		this.mth = mth;
 		this.type = type;
 
-		if (resReg >= 0)
+		if (resReg >= 0) {
 			setResult(InsnArg.reg(resReg, mth.getReturnType()));
+		}
 
 		int k = isRange ? insn.getA() : 0;
 		if (type != InvokeType.STATIC) {
@@ -35,12 +36,35 @@ public class InvokeNode extends InsnNode {
 		}
 	}
 
+	private InvokeNode(MethodInfo mth, InvokeType invokeType, int argsCount) {
+		super(InsnType.INVOKE, argsCount);
+		this.mth = mth;
+		this.type = invokeType;
+	}
+
 	public InvokeType getInvokeType() {
 		return type;
 	}
 
 	public MethodInfo getCallMth() {
 		return mth;
+	}
+
+	@Override
+	public InsnNode copy() {
+		return copyCommonParams(new InvokeNode(mth, type, getArgsCount()));
+	}
+
+	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof InvokeNode) || !super.isSame(obj)) {
+			return false;
+		}
+		InvokeNode other = (InvokeNode) obj;
+		return type == other.type && mth.equals(other.mth);
 	}
 
 	@Override

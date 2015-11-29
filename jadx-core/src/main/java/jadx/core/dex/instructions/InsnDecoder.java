@@ -4,66 +4,66 @@ import jadx.core.dex.info.FieldInfo;
 import jadx.core.dex.info.MethodInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.InsnArg;
-import jadx.core.dex.instructions.args.NamedArg;
 import jadx.core.dex.instructions.args.PrimitiveType;
 import jadx.core.dex.instructions.args.RegisterArg;
 import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
+import jadx.core.utils.InsnUtils;
 import jadx.core.utils.exceptions.DecodeException;
 
-import com.android.dx.io.Code;
+import com.android.dex.Code;
 import com.android.dx.io.OpcodeInfo;
 import com.android.dx.io.Opcodes;
 import com.android.dx.io.instructions.DecodedInstruction;
 import com.android.dx.io.instructions.FillArrayDataPayloadDecodedInstruction;
 import com.android.dx.io.instructions.PackedSwitchPayloadDecodedInstruction;
+import com.android.dx.io.instructions.ShortArrayCodeInput;
 import com.android.dx.io.instructions.SparseSwitchPayloadDecodedInstruction;
 
 public class InsnDecoder {
 
 	private final MethodNode method;
-	private final DecodedInstruction[] insnArr;
 	private final DexNode dex;
+	private DecodedInstruction[] insnArr;
 
-	public InsnDecoder(MethodNode mthNode, Code mthCode) {
+	public InsnDecoder(MethodNode mthNode) {
 		this.method = mthNode;
 		this.dex = method.dex();
-		this.insnArr = DecodedInstruction.decodeAll(mthCode.getInstructions());
 	}
 
-	public InsnNode[] run() throws DecodeException {
-		InsnNode[] instructions = new InsnNode[insnArr.length];
+	public void decodeInsns(Code mthCode) throws DecodeException {
+		short[] encodedInstructions = mthCode.getInstructions();
+		int size = encodedInstructions.length;
+		DecodedInstruction[] decoded = new DecodedInstruction[size];
+		ShortArrayCodeInput in = new ShortArrayCodeInput(encodedInstructions);
 
+		try {
+			while (in.hasMore()) {
+				decoded[in.cursor()] = DecodedInstruction.decode(in);
+			}
+		} catch (Exception e) {
+			throw new DecodeException(method, "", e);
+		}
+		insnArr = decoded;
+	}
+
+	public InsnNode[] process() throws DecodeException {
+		InsnNode[] instructions = new InsnNode[insnArr.length];
 		for (int i = 0; i < insnArr.length; i++) {
 			DecodedInstruction rawInsn = insnArr[i];
 			if (rawInsn != null) {
 				InsnNode insn = decode(rawInsn, i);
 				if (insn != null) {
 					insn.setOffset(i);
-					insn.setInsnHashCode(calcHashCode(rawInsn));
 				}
 				instructions[i] = insn;
 			} else {
 				instructions[i] = null;
 			}
 		}
+		insnArr = null;
 		return instructions;
-	}
-
-	private int calcHashCode(DecodedInstruction insn) {
-		int hash = insn.getOpcode();
-		hash = hash * 31 + insn.getClass().getName().hashCode();
-		hash = hash * 31 + insn.getFormat().ordinal();
-		hash = hash * 31 + insn.getRegisterCount();
-		hash = hash * 31 + insn.getIndex();
-		hash = hash * 31 + insn.getTarget();
-		hash = hash * 31 + insn.getA();
-		hash = hash * 31 + insn.getB();
-		hash = hash * 31 + insn.getC();
-		hash = hash * 31 + insn.getD();
-		hash = hash * 31 + insn.getE();
-		return hash;
 	}
 
 	private InsnNode decode(DecodedInstruction insn, int offset) throws DecodeException {
@@ -388,8 +388,7 @@ public class InsnDecoder {
 
 			case Opcodes.MOVE_EXCEPTION:
 				return insn(InsnType.MOVE_EXCEPTION,
-						InsnArg.reg(insn, 0, ArgType.unknown(PrimitiveType.OBJECT)),
-						new NamedArg("e", ArgType.unknown(PrimitiveType.OBJECT)));
+						InsnArg.reg(insn, 0, ArgType.unknown(PrimitiveType.OBJECT)));
 
 			case Opcodes.RETURN_VOID:
 				return new InsnNode(InsnType.RETURN, 0);
@@ -473,7 +472,7 @@ public class InsnDecoder {
 			case Opcodes.ARRAY_LENGTH: {
 				InsnNode node = new InsnNode(InsnType.ARRAY_LENGTH, 1);
 				node.setResult(InsnArg.reg(insn, 0, ArgType.INT));
-				node.addArg(InsnArg.reg(insn, 1, ArgType.unknown(PrimitiveType.ARRAY)));
+				node.addArg(InsnArg.reg(insn, 1, ArgType.array(ArgType.UNKNOWN)));
 				return node;
 			}
 
@@ -536,8 +535,9 @@ public class InsnDecoder {
 						InsnArg.reg(insn, 0, dex.getType(insn.getIndex())));
 
 			case Opcodes.NEW_ARRAY:
-				return insn(InsnType.NEW_ARRAY,
-						InsnArg.reg(insn, 0, dex.getType(insn.getIndex())),
+				ArgType arrType = dex.getType(insn.getIndex());
+				return new NewArrayNode(arrType,
+						InsnArg.reg(insn, 0, arrType),
 						InsnArg.reg(insn, 1, ArgType.INT));
 
 			case Opcodes.FILL_ARRAY_DATA:
@@ -578,14 +578,16 @@ public class InsnDecoder {
 			targets = ps.getTargets();
 			keys = new Object[targets.length];
 			int k = ps.getFirstKey();
-			for (int i = 0; i < keys.length; i++)
+			for (int i = 0; i < keys.length; i++) {
 				keys[i] = k++;
+			}
 		} else {
 			SparseSwitchPayloadDecodedInstruction ss = (SparseSwitchPayloadDecodedInstruction) payload;
 			targets = ss.getTargets();
 			keys = new Object[targets.length];
-			for (int i = 0; i < keys.length; i++)
+			for (int i = 0; i < keys.length; i++) {
 				keys[i] = ss.getKeys()[i];
+			}
 		}
 		// convert from relative to absolute offsets
 		for (int i = 0; i < targets.length; i++) {
@@ -604,20 +606,27 @@ public class InsnDecoder {
 		int resReg = getMoveResultRegister(insnArr, offset);
 		ArgType arrType = dex.getType(insn.getIndex());
 		ArgType elType = arrType.getArrayElement();
-		InsnArg[] regs = new InsnArg[insn.getRegisterCount()];
+		boolean typeImmutable = elType.isPrimitive();
+		int regsCount = insn.getRegisterCount();
+		InsnArg[] regs = new InsnArg[regsCount];
 		if (isRange) {
 			int r = insn.getA();
-			for (int i = 0; i < insn.getRegisterCount(); i++) {
-				regs[i] = InsnArg.reg(r, elType);
+			for (int i = 0; i < regsCount; i++) {
+				regs[i] = InsnArg.reg(r, elType, typeImmutable);
 				r++;
 			}
 		} else {
-			for (int i = 0; i < insn.getRegisterCount(); i++)
-				regs[i] = InsnArg.reg(insn, i, elType);
+			for (int i = 0; i < regsCount; i++) {
+				int regNum = InsnUtils.getArg(insn, i);
+				regs[i] = InsnArg.reg(regNum, elType, typeImmutable);
+			}
 		}
-		return insn(InsnType.FILLED_NEW_ARRAY,
-				resReg == -1 ? null : InsnArg.reg(resReg, arrType),
-				regs);
+		InsnNode node = new FilledNewArrayNode(elType, regs.length);
+		node.setResult(resReg == -1 ? null : InsnArg.reg(resReg, arrType));
+		for (InsnArg arg : regs) {
+			node.addArg(arg);
+		}
+		return node;
 	}
 
 	private InsnNode cmp(DecodedInstruction insn, InsnType itype, ArgType argType) {
@@ -685,16 +694,6 @@ public class InsnDecoder {
 		return node;
 	}
 
-	private InsnNode insn(InsnType type, RegisterArg res, InsnArg... args) {
-		InsnNode node = new InsnNode(type, args == null ? 0 : args.length);
-		node.setResult(res);
-		if (args != null) {
-			for (InsnArg arg : args)
-				node.addArg(arg);
-		}
-		return node;
-	}
-
 	private int getMoveResultRegister(DecodedInstruction[] insnArr, int offset) {
 		int nextOffset = getNextInsnOffset(insnArr, offset);
 		if (nextOffset >= 0) {
@@ -711,19 +710,23 @@ public class InsnDecoder {
 
 	public static int getPrevInsnOffset(Object[] insnArr, int offset) {
 		int i = offset - 1;
-		while (i >= 0 && insnArr[i] == null)
+		while (i >= 0 && insnArr[i] == null) {
 			i--;
-		if (i < 0)
+		}
+		if (i < 0) {
 			return -1;
+		}
 		return i;
 	}
 
 	public static int getNextInsnOffset(Object[] insnArr, int offset) {
 		int i = offset + 1;
-		while (i < insnArr.length && insnArr[i] == null)
+		while (i < insnArr.length && insnArr[i] == null) {
 			i++;
-		if (i >= insnArr.length)
+		}
+		if (i >= insnArr.length) {
 			return -1;
+		}
 		return i;
 	}
 }

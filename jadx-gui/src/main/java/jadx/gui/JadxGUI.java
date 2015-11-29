@@ -1,10 +1,12 @@
 package jadx.gui;
 
-import jadx.cli.JadxCLIArgs;
+import jadx.gui.settings.JadxSettings;
+import jadx.gui.settings.JadxSettingsAdapter;
+import jadx.gui.ui.MainWindow;
+import jadx.gui.utils.LogCollector;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
-import javax.swing.WindowConstants;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,27 +16,21 @@ public class JadxGUI {
 
 	public static void main(String[] args) {
 		try {
-			final JadxCLIArgs jadxArgs = new JadxCLIArgs(args);
+			LogCollector.register();
+			final JadxSettings jadxArgs = JadxSettingsAdapter.load();
+			// overwrite loaded settings by command line arguments
+			if (!jadxArgs.processArgs(args)) {
+				return;
+			}
 			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
 			SwingUtilities.invokeLater(new Runnable() {
 				public void run() {
-					JadxWrapper wrapper = new JadxWrapper(jadxArgs);
-					MainWindow mainWindow = new MainWindow(wrapper);
-					mainWindow.pack();
-					mainWindow.setLocationAndPosition();
-					mainWindow.setVisible(true);
-					mainWindow.setLocationRelativeTo(null);
-					mainWindow.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
-
-					if (jadxArgs.getInput().isEmpty()) {
-						mainWindow.openFile();
-					} else {
-						mainWindow.openFile(jadxArgs.getInput().get(0));
-					}
+					MainWindow window = new MainWindow(jadxArgs);
+					window.open();
 				}
 			});
 		} catch (Throwable e) {
-			LOG.error("Error: " + e.getMessage());
+			LOG.error("Error: {}", e.getMessage());
 			System.exit(1);
 		}
 	}
