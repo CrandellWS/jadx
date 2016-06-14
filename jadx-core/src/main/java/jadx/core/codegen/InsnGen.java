@@ -38,7 +38,6 @@ import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.nodes.RootNode;
 import jadx.core.utils.ErrorsCounter;
 import jadx.core.utils.RegionUtils;
-import jadx.core.utils.StringUtils;
 import jadx.core.utils.exceptions.CodegenException;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
@@ -52,6 +51,8 @@ import java.util.Set;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static jadx.core.utils.android.AndroidResourcesUtils.handleAppResField;
 
 public class InsnGen {
 	private static final Logger LOG = LoggerFactory.getLogger(InsnGen.class);
@@ -130,8 +131,8 @@ public class InsnGen {
 		code.add(mgen.getNameGen().assignArg(arg));
 	}
 
-	private static String lit(LiteralArg arg) {
-		return TypeGen.literalToString(arg.getLiteral(), arg.getType());
+	private String lit(LiteralArg arg) {
+		return TypeGen.literalToString(arg.getLiteral(), arg.getType(), mth);
 	}
 
 	private void instanceField(CodeWriter code, FieldInfo field, InsnArg arg) throws CodegenException {
@@ -170,12 +171,7 @@ public class InsnGen {
 		boolean fieldFromThisClass = clsGen.getClassNode().getClassInfo().equals(declClass);
 		if (!fieldFromThisClass) {
 			// Android specific resources class handler
-			ClassInfo parentClass = declClass.getParentClass();
-			if (parentClass != null && parentClass.getShortName().equals("R")) {
-				clsGen.useClass(code, parentClass);
-				code.add('.');
-				code.add(declClass.getAlias().getShortName());
-			} else {
+			if (!handleAppResField(code, clsGen, declClass)) {
 				clsGen.useClass(code, declClass);
 			}
 			code.add('.');
@@ -236,7 +232,7 @@ public class InsnGen {
 		switch (insn.getType()) {
 			case CONST_STR:
 				String str = ((ConstStringNode) insn).getString();
-				code.add(StringUtils.unescapeString(str));
+				code.add(mth.dex().root().getStringUtils().unescapeString(str));
 				break;
 
 			case CONST_CLASS:

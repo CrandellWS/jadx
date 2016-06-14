@@ -1,6 +1,5 @@
 package jadx.tests.api;
 
-import jadx.api.IJadxArgs;
 import jadx.api.JadxArgs;
 import jadx.api.JadxDecompiler;
 import jadx.api.JadxInternalAccess;
@@ -16,7 +15,6 @@ import jadx.core.dex.visitors.DepthTraversal;
 import jadx.core.dex.visitors.IDexTreeVisitor;
 import jadx.core.utils.exceptions.CodegenException;
 import jadx.core.utils.exceptions.JadxException;
-import jadx.core.utils.files.FileUtils;
 import jadx.tests.api.compiler.DynamicCompiler;
 import jadx.tests.api.compiler.StaticCompiler;
 import jadx.tests.api.utils.TestUtils;
@@ -36,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.jar.JarOutputStream;
 
+import static jadx.core.utils.files.FileUtils.addFileToJar;
+import static jadx.core.utils.files.FileUtils.close;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.is;
@@ -51,8 +51,8 @@ public abstract class IntegrationTest extends TestUtils {
 	private static final String TEST_DIRECTORY = "src/test/java";
 	private static final String TEST_DIRECTORY2 = "jadx-core/" + TEST_DIRECTORY;
 
-	protected boolean outputCFG = false;
-	protected boolean isFallback = false;
+	private JadxArgs args;
+
 	protected boolean deleteTmpFiles = true;
 	protected boolean withDebugInfo = true;
 	protected boolean unloadCls = true;
@@ -63,6 +63,13 @@ public abstract class IntegrationTest extends TestUtils {
 
 	protected boolean compile = true;
 	private DynamicCompiler dynamicCompiler;
+
+	public IntegrationTest() {
+		args = new JadxArgs();
+		args.setShowInconsistentCode(true);
+		args.setThreadsCount(1);
+		args.setSkipResources(true);
+	}
 
 	public ClassNode getClassNode(Class<?> clazz) {
 		try {
@@ -76,7 +83,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	public ClassNode getClassNodeFromFile(File file, String clsName) {
-		JadxDecompiler d = new JadxDecompiler(getArgs());
+		JadxDecompiler d = new JadxDecompiler(args);
 		try {
 			d.loadFile(file);
 		} catch (JadxException e) {
@@ -84,7 +91,7 @@ public abstract class IntegrationTest extends TestUtils {
 			fail(e.getMessage());
 		}
 		RootNode root = JadxInternalAccess.getRoot(d);
-		root.getResourcesNames().putAll(resMap);
+		root.getConstValues().getResourcesNames().putAll(resMap);
 
 		ClassNode cls = root.searchClassByName(clsName);
 		assertThat("Class not found: " + clsName, cls, notNullValue());
@@ -134,17 +141,6 @@ public abstract class IntegrationTest extends TestUtils {
 					!mthNode.contains(AFlag.INCONSISTENT_CODE) && !mthNode.contains(AType.JADX_ERROR));
 		}
 		assertThat(cls.getCode().toString(), not(containsString("inconsistent")));
-	}
-
-	private IJadxArgs getArgs() {
-		JadxArgs args = new JadxArgs();
-		args.setCfgOutput(outputCFG);
-		args.setRawCFGOutput(outputCFG);
-		args.setFallbackMode(isFallback);
-		args.setShowInconsistentCode(true);
-		args.setThreadsCount(1);
-		args.setSkipResources(true);
-		return args;
 	}
 
 	private void runAutoCheck(String clsName) {
@@ -228,12 +224,12 @@ public abstract class IntegrationTest extends TestUtils {
 		return invoke(method, new Class<?>[0]);
 	}
 
-	public Object invoke(String method, Class[] types, Object... args) throws Exception {
+	public Object invoke(String method, Class<?>[] types, Object... args) throws Exception {
 		Method mth = getReflectMethod(method, types);
 		return invoke(mth, args);
 	}
 
-	public Method getReflectMethod(String method, Class... types) {
+	public Method getReflectMethod(String method, Class<?>... types) {
 		assertNotNull("dynamicCompiler not ready", dynamicCompiler);
 		try {
 			return dynamicCompiler.getMethod(method, types);
@@ -266,9 +262,9 @@ public abstract class IntegrationTest extends TestUtils {
 		File temp = createTempFile(".jar");
 		JarOutputStream jo = new JarOutputStream(new FileOutputStream(temp));
 		for (File file : list) {
-			FileUtils.addFileToJar(jo, file, path + "/" + file.getName());
+			addFileToJar(jo, file, path + "/" + file.getName());
 		}
-		jo.close();
+		close(jo);
 		return temp;
 	}
 
@@ -352,6 +348,14 @@ public abstract class IntegrationTest extends TestUtils {
 		return files;
 	}
 
+	public JadxArgs getArgs() {
+		return args;
+	}
+
+	public void setArgs(JadxArgs args) {
+		this.args = args;
+	}
+
 	public void setResMap(Map<Integer, String> resMap) {
 		this.resMap = resMap;
 	}
@@ -361,7 +365,7 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	protected void setFallback() {
-		this.isFallback = true;
+		this.args.setFallbackMode(true);
 	}
 
 	protected void disableCompilation() {
@@ -375,7 +379,8 @@ public abstract class IntegrationTest extends TestUtils {
 	// Use only for debug purpose
 	@Deprecated
 	protected void setOutputCFG() {
-		this.outputCFG = true;
+		this.args.setCfgOutput(true);
+		this.args.setRawCFGOutput(true);
 	}
 
 	// Use only for debug purpose

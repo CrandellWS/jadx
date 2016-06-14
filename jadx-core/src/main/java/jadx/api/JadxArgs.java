@@ -24,6 +24,10 @@ public class JadxArgs implements IJadxArgs {
 	private int deobfuscationMinLength = 0;
 	private int deobfuscationMaxLength = Integer.MAX_VALUE;
 
+	private boolean escapeUnicode = false;
+	private boolean replaceConsts = true;
+	private boolean exportAsGradleProject = false;
+
 	@Override
 	public File getOutDir() {
 		return outDir;
@@ -148,5 +152,32 @@ public class JadxArgs implements IJadxArgs {
 
 	public void setDeobfuscationMaxLength(int deobfuscationMaxLength) {
 		this.deobfuscationMaxLength = deobfuscationMaxLength;
+	}
+
+	@Override
+	public boolean escapeUnicode() {
+		return escapeUnicode;
+	}
+
+	public void setEscapeUnicode(boolean escapeUnicode) {
+		this.escapeUnicode = escapeUnicode;
+	}
+
+	@Override
+	public boolean isReplaceConsts() {
+		return replaceConsts;
+	}
+
+	public void setReplaceConsts(boolean replaceConsts) {
+		this.replaceConsts = replaceConsts;
+	}
+
+	@Override
+	public boolean isExportAsGradleProject() {
+		return exportAsGradleProject;
+	}
+
+	public void setExportAsGradleProject(boolean exportAsGradleProject) {
+		this.exportAsGradleProject = exportAsGradleProject;
 	}
 }
