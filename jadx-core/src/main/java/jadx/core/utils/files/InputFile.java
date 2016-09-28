@@ -16,13 +16,14 @@ import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.android.dex.Dex;
 
-import static jadx.core.utils.files.FileUtils.close;
+import static jadx.core.utils.files.FileUtils.*;
 
 public class InputFile {
 	private static final Logger LOG = LoggerFactory.getLogger(InputFile.class);
@@ -45,6 +46,7 @@ public class InputFile {
 
 	private void searchDexFiles() throws IOException, DecodeException {
 		String fileName = file.getName();
+
 		if (fileName.endsWith(".dex")) {
 			addDexFile(new Dex(file));
 			return;
@@ -53,7 +55,8 @@ public class InputFile {
 			addDexFile(loadFromClassFile(file));
 			return;
 		}
-		if (fileName.endsWith(".apk") || fileName.endsWith(".zip")) {
+
+		if (fileName.endsWith(".apk") || fileName.endsWith(".zip") || isApkfile(file) || isZipDexfile(file)) {
 			loadFromZip(".dex");
 			return;
 		}
