@@ -37,6 +37,20 @@ public class SwitchNode extends InsnNode {
 	}
 
 	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof SwitchNode) || !super.isSame(obj)) {
+			return false;
+		}
+		SwitchNode other = (SwitchNode) obj;
+		return def == other.def
+				&& Arrays.equals(keys, other.keys)
+				&& Arrays.equals(targets, other.targets);
+	}
+
+	@Override
 	public String toString() {
 		StringBuilder targ = new StringBuilder();
 		targ.append('[');

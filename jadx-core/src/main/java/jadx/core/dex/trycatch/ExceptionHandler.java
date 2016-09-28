@@ -2,7 +2,7 @@ package jadx.core.dex.trycatch;
 
 import jadx.core.Consts;
 import jadx.core.dex.info.ClassInfo;
-import jadx.core.dex.instructions.args.NamedArg;
+import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.IContainer;
 import jadx.core.utils.InsnUtils;
@@ -15,12 +15,13 @@ public class ExceptionHandler {
 	private final ClassInfo catchType;
 	private final int handleOffset;
 
-	private BlockNode handleBlock;
+	private BlockNode handlerBlock;
 	private final List<BlockNode> blocks = new ArrayList<BlockNode>();
 	private IContainer handlerRegion;
-	private NamedArg arg;
+	private InsnArg arg;
 
 	private TryCatchBlock tryBlock;
+	private boolean isFinally;
 
 	public ExceptionHandler(int addr, ClassInfo type) {
 		this.handleOffset = addr;
@@ -39,12 +40,12 @@ public class ExceptionHandler {
 		return handleOffset;
 	}
 
-	public BlockNode getHandleBlock() {
-		return handleBlock;
+	public BlockNode getHandlerBlock() {
+		return handlerBlock;
 	}
 
-	public void setHandleBlock(BlockNode handleBlock) {
-		this.handleBlock = handleBlock;
+	public void setHandlerBlock(BlockNode handlerBlock) {
+		this.handlerBlock = handlerBlock;
 	}
 
 	public List<BlockNode> getBlocks() {
@@ -63,11 +64,11 @@ public class ExceptionHandler {
 		this.handlerRegion = handlerRegion;
 	}
 
-	public NamedArg getArg() {
+	public InsnArg getArg() {
 		return arg;
 	}
 
-	public void setArg(NamedArg arg) {
+	public void setArg(InsnArg arg) {
 		this.arg = arg;
 	}
 
@@ -77,6 +78,14 @@ public class ExceptionHandler {
 
 	public TryCatchBlock getTryBlock() {
 		return tryBlock;
+	}
+
+	public boolean isFinally() {
+		return isFinally;
+	}
+
+	public void setFinally(boolean isFinally) {
+		this.isFinally = isFinally;
 	}
 
 	@Override

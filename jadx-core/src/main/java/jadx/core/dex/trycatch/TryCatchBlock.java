@@ -1,20 +1,15 @@
 package jadx.core.dex.trycatch;
 
-import jadx.core.dex.attributes.AttributeType;
-import jadx.core.dex.attributes.IAttribute;
+import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.nodes.BlockNode;
-import jadx.core.dex.nodes.IBlock;
-import jadx.core.dex.nodes.IContainer;
-import jadx.core.dex.nodes.InsnContainer;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
-import jadx.core.utils.InstructionRemover;
+import jadx.core.utils.BlockUtils;
 import jadx.core.utils.Utils;
 
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -22,7 +17,6 @@ import java.util.List;
 public class TryCatchBlock {
 
 	private final List<ExceptionHandler> handlers;
-	private IContainer finalBlock;
 
 	// references for fast remove/modify
 	private final List<InsnNode> insns;
@@ -34,8 +28,16 @@ public class TryCatchBlock {
 		attr = new CatchAttr(this);
 	}
 
-	public Collection<ExceptionHandler> getHandlers() {
-		return Collections.unmodifiableCollection(handlers);
+	public Iterable<ExceptionHandler> getHandlers() {
+		return handlers;
+	}
+
+	public int getHandlersCount() {
+		return handlers.size();
+	}
+
+	public boolean containsAllHandlers(TryCatchBlock tb) {
+		return handlers.containsAll(tb.handlers);
 	}
 
 	public ExceptionHandler addHandler(MethodNode mth, int addr, ClassInfo type) {
@@ -50,6 +52,7 @@ public class TryCatchBlock {
 		for (Iterator<ExceptionHandler> it = handlers.iterator(); it.hasNext(); ) {
 			ExceptionHandler h = it.next();
 			if (h == handler) {
+				unbindHandler(h);
 				it.remove();
 				break;
 			}
@@ -59,94 +62,89 @@ public class TryCatchBlock {
 		}
 	}
 
-	private void removeWholeBlock(MethodNode mth) {
-		if (finalBlock != null) {
-			// search catch attr
-			for (BlockNode block : mth.getBasicBlocks()) {
-				CatchAttr cb = (CatchAttr) block.getAttributes().get(AttributeType.CATCH_BLOCK);
-				if (cb == attr) {
-					for (ExceptionHandler eh : mth.getExceptionHandlers()) {
-						if (eh.getBlocks().contains(block)) {
-							TryCatchBlock tb = eh.getTryBlock();
-							tb.setFinalBlockFromInsns(mth, ((IBlock) finalBlock).getInstructions());
-						}
-					}
+	private void unbindHandler(ExceptionHandler handler) {
+		for (BlockNode block : handler.getBlocks()) {
+			// skip synthetic loop exit blocks
+			BlockUtils.skipPredSyntheticPaths(block);
+			block.add(AFlag.SKIP);
+			ExcHandlerAttr excHandlerAttr = block.get(AType.EXC_HANDLER);
+			if (excHandlerAttr != null) {
+				if (excHandlerAttr.getHandler().equals(handler)) {
+					block.remove(AType.EXC_HANDLER);
 				}
 			}
-		} else {
-			// self destruction
-			for (InsnNode insn : insns) {
-				insn.getAttributes().remove(attr);
+			SplitterBlockAttr splitter = handler.getHandlerBlock().get(AType.SPLITTER_BLOCK);
+			if (splitter != null) {
+				splitter.getBlock().remove(AType.SPLITTER_BLOCK);
 			}
-			insns.clear();
+		}
+	}
+
+	private void removeWholeBlock(MethodNode mth) {
+		// self destruction
+		for (Iterator<ExceptionHandler> it = handlers.iterator(); it.hasNext(); ) {
+			ExceptionHandler h = it.next();
+			unbindHandler(h);
+			it.remove();
+		}
+		for (InsnNode insn : insns) {
+			insn.removeAttr(attr);
+		}
+		insns.clear();
+		if (mth.getBasicBlocks() != null) {
 			for (BlockNode block : mth.getBasicBlocks()) {
-				block.getAttributes().remove(attr);
+				block.removeAttr(attr);
 			}
 		}
 	}
 
 	public void addInsn(InsnNode insn) {
 		insns.add(insn);
-		insn.getAttributes().add(attr);
+		insn.addAttr(attr);
 	}
 
-	public void removeInsn(InsnNode insn) {
+	public void removeInsn(MethodNode mth, InsnNode insn) {
 		insns.remove(insn);
-		insn.getAttributes().remove(attr.getType());
+		insn.remove(AType.CATCH_BLOCK);
+		if (insns.isEmpty()) {
+			removeWholeBlock(mth);
+		}
+	}
+
+	public void removeBlock(MethodNode mth, BlockNode block) {
+		for (InsnNode insn : block.getInstructions()) {
+			insns.remove(insn);
+			insn.remove(AType.CATCH_BLOCK);
+		}
+		if (insns.isEmpty()) {
+			removeWholeBlock(mth);
+		}
 	}
 
 	public Iterable<InsnNode> getInsns() {
 		return insns;
 	}
 
-	public int getInsnsCount() {
-		return insns.size();
-	}
-
 	public CatchAttr getCatchAttr() {
 		return attr;
 	}
 
-	public IContainer getFinalBlock() {
-		return finalBlock;
-	}
-
-	public void setFinalBlock(IContainer finalBlock) {
-		this.finalBlock = finalBlock;
-	}
-
-	public void setFinalBlockFromInsns(MethodNode mth, List<InsnNode> insns) {
-		List<InsnNode> finalBlockInsns = new ArrayList<InsnNode>(insns);
-		setFinalBlock(new InsnContainer(finalBlockInsns));
-
-		InstructionRemover.unbindInsnList(finalBlockInsns);
-
-		// remove these instructions from other handlers
-		for (ExceptionHandler h : getHandlers()) {
-			for (BlockNode ehb : h.getBlocks()) {
-				ehb.getInstructions().removeAll(finalBlockInsns);
-			}
+	public boolean merge(MethodNode mth, TryCatchBlock tryBlock) {
+		if (tryBlock == this) {
+			return false;
 		}
-		// remove from blocks with this catch
-		for (BlockNode b : mth.getBasicBlocks()) {
-			IAttribute ca = b.getAttributes().get(AttributeType.CATCH_BLOCK);
-			if (attr == ca) {
-				b.getInstructions().removeAll(finalBlockInsns);
-			}
-		}
-	}
 
-	public void merge(MethodNode mth, TryCatchBlock tryBlock) {
 		for (InsnNode insn : tryBlock.getInsns()) {
 			this.addInsn(insn);
 		}
-		this.handlers.addAll(tryBlock.getHandlers());
+		this.handlers.addAll(tryBlock.handlers);
 		for (ExceptionHandler eh : handlers) {
 			eh.setTryBlock(this);
 		}
 		// clear
 		tryBlock.handlers.clear();
 		tryBlock.removeWholeBlock(mth);
+		return true;
 	}
 
 	@Override

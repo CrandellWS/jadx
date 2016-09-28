@@ -5,6 +5,7 @@ import jadx.core.utils.exceptions.DecodeException;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -24,6 +25,8 @@ public class ClspGraph {
 
 	private final Map<String, Set<String>> ancestorCache = new WeakHashMap<String, Set<String>>();
 	private Map<String, NClass> nameMap;
+
+	private final Set<String> missingClasses = new HashSet<String>();
 
 	public void load() throws IOException, DecodeException {
 		ClsSet set = new ClsSet();
@@ -45,16 +48,10 @@ public class ClspGraph {
 			throw new JadxRuntimeException("Classpath must be loaded first");
 		}
 		int size = classes.size();
-		for (ClassNode cls : classes) {
-			size += cls.getInnerClasses().size();
-		}
 		NClass[] nClasses = new NClass[size];
 		int k = 0;
 		for (ClassNode cls : classes) {
 			nClasses[k++] = addClass(cls);
-			for (ClassNode inner : cls.getInnerClasses()) {
-				nClasses[k++] = addClass(inner);
-			}
 		}
 		for (int i = 0; i < size; i++) {
 			nClasses[i].setParents(ClsSet.makeParentsArray(classes.get(i), nameMap));
@@ -62,8 +59,9 @@ public class ClspGraph {
 	}
 
 	private NClass addClass(ClassNode cls) {
-		NClass nClass = new NClass(cls.getRawName(), -1);
-		nameMap.put(cls.getRawName(), nClass);
+		String rawName = cls.getRawName();
+		NClass nClass = new NClass(rawName, -1);
+		nameMap.put(rawName, nClass);
 		return nClass;
 	}
 
@@ -77,15 +75,15 @@ public class ClspGraph {
 			return clsName;
 		}
 		NClass cls = nameMap.get(implClsName);
-		if (cls != null) {
-			if (isImplements(clsName, implClsName)) {
-				return implClsName;
-			}
-			Set<String> anc = getAncestors(clsName);
-			return searchCommonParent(anc, cls);
+		if (cls == null) {
+			missingClasses.add(clsName);
+			return null;
 		}
-		LOG.debug("Missing class: {}", implClsName);
-		return null;
+		if (isImplements(clsName, implClsName)) {
+			return implClsName;
+		}
+		Set<String> anc = getAncestors(clsName);
+		return searchCommonParent(anc, cls);
 	}
 
 	private String searchCommonParent(Set<String> anc, NClass cls) {
@@ -93,11 +91,10 @@ public class ClspGraph {
 			String name = p.getName();
 			if (anc.contains(name)) {
 				return name;
-			} else {
-				String r = searchCommonParent(anc, p);
-				if (r != null) {
-					return r;
-				}
+			}
+			String r = searchCommonParent(anc, p);
+			if (r != null) {
+				return r;
 			}
 		}
 		return null;
@@ -109,23 +106,38 @@ public class ClspGraph {
 			return result;
 		}
 		NClass cls = nameMap.get(clsName);
-		if (cls != null) {
-			result = new HashSet<String>();
-			addAncestorsNames(cls, result);
-			if (result.isEmpty()) {
-				result = Collections.emptySet();
-			}
-			ancestorCache.put(clsName, result);
-			return result;
+		if (cls == null) {
+			missingClasses.add(clsName);
+			return Collections.emptySet();
 		}
-		LOG.debug("Missing class: {}", clsName);
-		return Collections.emptySet();
+		result = new HashSet<String>();
+		addAncestorsNames(cls, result);
+		if (result.isEmpty()) {
+			result = Collections.emptySet();
+		}
+		ancestorCache.put(clsName, result);
+		return result;
 	}
 
 	private void addAncestorsNames(NClass cls, Set<String> result) {
 		result.add(cls.getName());
 		for (NClass p : cls.getParents()) {
 			addAncestorsNames(p, result);
+		}
+	}
+
+	public void printMissingClasses() {
+		int count = missingClasses.size();
+		if (count == 0) {
+			return;
+		}
+		LOG.warn("Found {} references to unknown classes", count);
+		if (LOG.isDebugEnabled()) {
+			List<String> clsNames = new ArrayList<String>(missingClasses);
+			Collections.sort(clsNames);
+			for (String cls : clsNames) {
+				LOG.debug("  {}", cls);
+			}
 		}
 	}
 }

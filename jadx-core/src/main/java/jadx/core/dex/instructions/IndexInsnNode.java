@@ -17,6 +17,23 @@ public class IndexInsnNode extends InsnNode {
 	}
 
 	@Override
+	public IndexInsnNode copy() {
+		return copyCommonParams(new IndexInsnNode(insnType, index, getArgsCount()));
+	}
+
+	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof IndexInsnNode) || !super.isSame(obj)) {
+			return false;
+		}
+		IndexInsnNode other = (IndexInsnNode) obj;
+		return index == null ? other.index == null : index.equals(other.index);
+	}
+
+	@Override
 	public String toString() {
 		return super.toString() + " " + InsnUtils.indexToString(index);
 	}

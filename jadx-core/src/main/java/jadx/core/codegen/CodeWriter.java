@@ -1,8 +1,8 @@
 package jadx.core.codegen;
 
 import jadx.api.CodePosition;
-import jadx.core.dex.attributes.LineAttrNode;
-import jadx.core.utils.Utils;
+import jadx.core.dex.attributes.nodes.LineAttrNode;
+import jadx.core.utils.files.FileUtils;
 
 import java.io.File;
 import java.io.PrintWriter;
@@ -10,16 +10,21 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.TreeMap;
 
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static jadx.core.utils.files.FileUtils.close;
+
 public class CodeWriter {
 	private static final Logger LOG = LoggerFactory.getLogger(CodeWriter.class);
-	private static final int MAX_FILENAME_LENGTH = 128;
 
 	public static final String NL = System.getProperty("line.separator");
 	public static final String INDENT = "    ";
+
+	private static final boolean ADD_LINE_NUMBERS = false;
 
 	private static final String[] INDENT_CACHE = {
 			"",
@@ -30,22 +35,23 @@ public class CodeWriter {
 			INDENT + INDENT + INDENT + INDENT + INDENT,
 	};
 
-	private final StringBuilder buf = new StringBuilder();
+	private StringBuilder buf = new StringBuilder();
+	@Nullable
+	private String code;
 	private String indentStr;
 	private int indent;
 
 	private int line = 1;
 	private int offset = 0;
 	private Map<CodePosition, Object> annotations = Collections.emptyMap();
+	private Map<Integer, Integer> lineMap = Collections.emptyMap();
 
 	public CodeWriter() {
 		this.indent = 0;
 		this.indentStr = "";
-	}
-
-	public CodeWriter(int indent) {
-		this.indent = indent;
-		updateIndent();
+		if (ADD_LINE_NUMBERS) {
+			incIndent(2);
+		}
 	}
 
 	public CodeWriter startLine() {
@@ -68,8 +74,23 @@ public class CodeWriter {
 		return this;
 	}
 
-	public CodeWriter add(Object obj) {
-		add(obj.toString());
+	public CodeWriter startLineWithNum(int sourceLine) {
+		if (sourceLine == 0) {
+			startLine();
+			return this;
+		}
+		if (ADD_LINE_NUMBERS) {
+			newLine();
+			attachSourceLine(sourceLine);
+			String ln = "/* " + sourceLine + " */ ";
+			add(ln);
+			if (indentStr.length() > ln.length()) {
+				add(indentStr.substring(ln.length()));
+			}
+		} else {
+			startLine();
+			attachSourceLine(sourceLine);
+		}
 		return this;
 	}
 
@@ -91,14 +112,22 @@ public class CodeWriter {
 			CodePosition pos = entry.getKey();
 			attachAnnotation(entry.getValue(), new CodePosition(line + pos.getLine(), pos.getOffset()));
 		}
+		for (Map.Entry<Integer, Integer> entry : code.lineMap.entrySet()) {
+			attachSourceLine(line + entry.getKey(), entry.getValue());
+		}
 		line += code.line;
 		offset = code.offset;
-		buf.append(code);
+		buf.append(code.buf);
 		return this;
 	}
 
 	public CodeWriter newLine() {
 		addLine();
+		return this;
+	}
+
+	public CodeWriter addIndent() {
+		add(INDENT);
 		return this;
 	}
 
@@ -111,11 +140,6 @@ public class CodeWriter {
 	private CodeWriter addLineIndent() {
 		buf.append(indentStr);
 		offset += indentStr.length();
-		return this;
-	}
-
-	public CodeWriter addIndent() {
-		add(INDENT);
 		return this;
 	}
 
@@ -154,6 +178,10 @@ public class CodeWriter {
 		updateIndent();
 	}
 
+	public int getIndent() {
+		return indent;
+	}
+
 	public int getLine() {
 		return line;
 	}
@@ -170,12 +198,13 @@ public class CodeWriter {
 		}
 	}
 
-	public Object attachDefinition(LineAttrNode obj) {
-		return attachAnnotation(new DefinitionWrapper(obj), new CodePosition(line, offset));
+	public void attachDefinition(LineAttrNode obj) {
+		attachAnnotation(obj);
+		attachAnnotation(new DefinitionWrapper(obj), new CodePosition(line, offset));
 	}
 
-	public Object attachAnnotation(Object obj) {
-		return attachAnnotation(obj, new CodePosition(line, offset + 1));
+	public void attachAnnotation(Object obj) {
+		attachAnnotation(obj, new CodePosition(line, offset + 1));
 	}
 
 	private Object attachAnnotation(Object obj, CodePosition pos) {
@@ -189,8 +218,30 @@ public class CodeWriter {
 		return annotations;
 	}
 
+	public void attachSourceLine(int sourceLine) {
+		if (sourceLine == 0) {
+			return;
+		}
+		attachSourceLine(line, sourceLine);
+	}
+
+	private void attachSourceLine(int decompiledLine, int sourceLine) {
+		if (lineMap.isEmpty()) {
+			lineMap = new TreeMap<Integer, Integer>();
+		}
+		lineMap.put(decompiledLine, sourceLine);
+	}
+
+	public Map<Integer, Integer> getLineMapping() {
+		return lineMap;
+	}
+
 	public void finish() {
+		removeFirstEmptyLine();
 		buf.trimToSize();
+		code = buf.toString();
+		buf = null;
+
 		Iterator<Map.Entry<CodePosition, Object>> it = annotations.entrySet().iterator();
 		while (it.hasNext()) {
 			Map.Entry<CodePosition, Object> entry = it.next();
@@ -203,29 +254,23 @@ public class CodeWriter {
 		}
 	}
 
-	private static String removeFirstEmptyLine(String str) {
-		if (str.startsWith(NL)) {
-			return str.substring(NL.length());
-		} else {
-			return str;
+	private void removeFirstEmptyLine() {
+		if (buf.indexOf(NL) == 0) {
+			buf.delete(0, NL.length());
 		}
 	}
 
-	public int length() {
+	public int bufLength() {
 		return buf.length();
 	}
 
-	public boolean isEmpty() {
-		return buf.length() == 0;
-	}
-
-	public boolean notEmpty() {
-		return buf.length() != 0;
+	public String getCodeStr() {
+		return code;
 	}
 
 	@Override
 	public String toString() {
-		return buf.toString();
+		return buf == null ? code : buf.toString();
 	}
 
 	public void save(File dir, String subDir, String fileName) {
@@ -237,48 +282,19 @@ public class CodeWriter {
 	}
 
 	public void save(File file) {
-		String name = file.getName();
-		if (name.length() > MAX_FILENAME_LENGTH) {
-			int dotIndex = name.indexOf('.');
-			int cutAt = MAX_FILENAME_LENGTH - name.length() + dotIndex - 1;
-			if (cutAt <= 0) {
-				name = name.substring(0, MAX_FILENAME_LENGTH - 1);
-			} else {
-				name = name.substring(0, cutAt) + name.substring(dotIndex);
-			}
-			file = new File(file.getParentFile(), name);
+		if (code == null) {
+			finish();
 		}
-
+		File outFile = FileUtils.prepareFile(file);
 		PrintWriter out = null;
 		try {
-			Utils.makeDirsForFile(file);
-			out = new PrintWriter(file, "UTF-8");
-			String code = buf.toString();
-			code = removeFirstEmptyLine(code);
-			out.print(code);
+			out = new PrintWriter(outFile, "UTF-8");
+			out.println(code);
 		} catch (Exception e) {
 			LOG.error("Save file error", e);
 		} finally {
-			if (out != null) {
-				out.close();
-			}
+			close(out);
 		}
 	}
 
-	@Override
-	public int hashCode() {
-		return buf.toString().hashCode();
-	}
-
-	@Override
-	public boolean equals(Object o) {
-		if (this == o) {
-			return true;
-		}
-		if (!(o instanceof CodeWriter)) {
-			return false;
-		}
-		CodeWriter that = (CodeWriter) o;
-		return buf.toString().equals(that.buf.toString());
-	}
 }

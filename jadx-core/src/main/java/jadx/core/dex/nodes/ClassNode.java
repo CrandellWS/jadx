@@ -2,11 +2,10 @@ package jadx.core.dex.nodes;
 
 import jadx.core.Consts;
 import jadx.core.codegen.CodeWriter;
-import jadx.core.dex.attributes.AttributeType;
-import jadx.core.dex.attributes.JadxErrorAttr;
-import jadx.core.dex.attributes.LineAttrNode;
-import jadx.core.dex.attributes.SourceFileAttr;
 import jadx.core.dex.attributes.annotations.Annotation;
+import jadx.core.dex.attributes.nodes.JadxErrorAttr;
+import jadx.core.dex.attributes.nodes.LineAttrNode;
+import jadx.core.dex.attributes.nodes.SourceFileAttr;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.AccessInfo.AFType;
 import jadx.core.dex.info.ClassInfo;
@@ -14,9 +13,8 @@ import jadx.core.dex.info.FieldInfo;
 import jadx.core.dex.info.MethodInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.LiteralArg;
-import jadx.core.dex.instructions.args.PrimitiveType;
 import jadx.core.dex.nodes.parser.AnnotationsParser;
-import jadx.core.dex.nodes.parser.FieldValueAttr;
+import jadx.core.dex.nodes.parser.FieldInitAttr;
 import jadx.core.dex.nodes.parser.SignatureParser;
 import jadx.core.dex.nodes.parser.StaticValuesParser;
 import jadx.core.utils.exceptions.DecodeException;
@@ -24,10 +22,14 @@ import jadx.core.utils.exceptions.JadxRuntimeException;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.TestOnly;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,26 +37,33 @@ import com.android.dex.ClassData;
 import com.android.dex.ClassData.Field;
 import com.android.dex.ClassData.Method;
 import com.android.dex.ClassDef;
+import com.android.dex.Dex;
+import com.android.dx.rop.code.AccessFlags;
 
-public class ClassNode extends LineAttrNode implements ILoadable {
+public class ClassNode extends LineAttrNode implements ILoadable, IDexNode {
 	private static final Logger LOG = LoggerFactory.getLogger(ClassNode.class);
 
 	private final DexNode dex;
 	private final ClassInfo clsInfo;
 	private final AccessInfo accessFlags;
-	private ClassInfo superClass;
-	private List<ClassInfo> interfaces;
+	private ArgType superClass;
+	private List<ArgType> interfaces;
 	private Map<ArgType, List<ArgType>> genericMap;
 
 	private final List<MethodNode> methods;
 	private final List<FieldNode> fields;
-	private Map<Object, FieldNode> constFields = Collections.emptyMap();
 	private List<ClassNode> innerClasses = Collections.emptyList();
 
 	// store decompiled code
 	private CodeWriter code;
 	// store parent for inner classes or 'this' otherwise
 	private ClassNode parentClass;
+
+	private ProcessState state = ProcessState.NOT_LOADED;
+	private final Set<ClassNode> dependencies = new HashSet<ClassNode>();
+
+	// cache maps
+	private Map<MethodInfo, MethodNode> mthInfoMap = Collections.emptyMap();
 
 	public ClassNode(DexNode dex, ClassDef cls) throws DecodeException {
 		this.dex = dex;
@@ -63,11 +72,11 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 			if (cls.getSupertypeIndex() == DexNode.NO_INDEX) {
 				this.superClass = null;
 			} else {
-				this.superClass = ClassInfo.fromDex(dex, cls.getSupertypeIndex());
+				this.superClass = dex.getType(cls.getSupertypeIndex());
 			}
-			this.interfaces = new ArrayList<ClassInfo>(cls.getInterfaces().length);
+			this.interfaces = new ArrayList<ArgType>(cls.getInterfaces().length);
 			for (short interfaceIdx : cls.getInterfaces()) {
-				this.interfaces.add(ClassInfo.fromDex(dex, interfaceIdx));
+				this.interfaces.add(dex.getType(interfaceIdx));
 			}
 			if (cls.getClassDataOffset() != 0) {
 				ClassData clsData = dex.readClassData(cls);
@@ -78,10 +87,10 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 				fields = new ArrayList<FieldNode>(fieldsCount);
 
 				for (Method mth : clsData.getDirectMethods()) {
-					methods.add(new MethodNode(this, mth));
+					methods.add(new MethodNode(this, mth, false));
 				}
 				for (Method mth : clsData.getVirtualMethods()) {
-					methods.add(new MethodNode(this, mth));
+					methods.add(new MethodNode(this, mth, true));
 				}
 
 				for (Field f : clsData.getStaticFields()) {
@@ -104,15 +113,12 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 			int sfIdx = cls.getSourceFileIndex();
 			if (sfIdx != DexNode.NO_INDEX) {
 				String fileName = dex.getString(sfIdx);
-				if (!this.getFullName().contains(fileName.replace(".java", ""))) {
-					this.getAttributes().add(new SourceFileAttr(fileName));
-					LOG.debug("Class '{}' compiled from '{}'", this, fileName);
-				}
+				addSourceFilenameAttr(fileName);
 			}
 
 			// restore original access flags from dalvik annotation if present
 			int accFlagsValue;
-			Annotation a = getAttributes().getAnnotation(Consts.DALVIK_INNER_CLASS);
+			Annotation a = getAnnotation(Consts.DALVIK_INNER_CLASS);
 			if (a != null) {
 				accFlagsValue = (Integer) a.getValues().get("accessFlags");
 			} else {
@@ -120,9 +126,21 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 			}
 			this.accessFlags = new AccessInfo(accFlagsValue, AFType.CLASS);
 
+			buildCache();
 		} catch (Exception e) {
-			throw new DecodeException("Error decode class: " + getFullName(), e);
+			throw new DecodeException("Error decode class: " + clsInfo, e);
 		}
+	}
+
+	// empty synthetic class
+	public ClassNode(DexNode dex, ClassInfo clsInfo) {
+		this.dex = dex;
+		this.clsInfo = clsInfo;
+		this.interfaces = Collections.emptyList();
+		this.methods = Collections.emptyList();
+		this.fields = Collections.emptyList();
+		this.accessFlags = new AccessInfo(AccessFlags.ACC_PUBLIC | AccessFlags.ACC_SYNTHETIC, AFType.CLASS);
+		this.parentClass = this;
 	}
 
 	private void loadAnnotations(ClassDef cls) {
@@ -130,8 +148,8 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		if (offset != 0) {
 			try {
 				new AnnotationsParser(this).parse(offset);
-			} catch (DecodeException e) {
-				LOG.error("Error parsing annotations in " + this, e);
+			} catch (Exception e) {
+				LOG.error("Error parsing annotations in {}", this, e);
 			}
 		}
 	}
@@ -139,29 +157,19 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 	private void loadStaticValues(ClassDef cls, List<FieldNode> staticFields) throws DecodeException {
 		for (FieldNode f : staticFields) {
 			if (f.getAccessFlags().isFinal()) {
-				FieldValueAttr nullValue = new FieldValueAttr(null);
-				f.getAttributes().add(nullValue);
+				f.addAttr(FieldInitAttr.NULL_VALUE);
 			}
 		}
-
 		int offset = cls.getStaticValuesOffset();
-		if (offset != 0) {
-			StaticValuesParser parser = new StaticValuesParser(dex, dex.openSection(offset));
-			int count = parser.processFields(staticFields);
-			constFields = new LinkedHashMap<Object, FieldNode>(count);
-			for (FieldNode f : staticFields) {
-				AccessInfo accFlags = f.getAccessFlags();
-				if (accFlags.isStatic() && accFlags.isFinal()) {
-					FieldValueAttr fv = (FieldValueAttr) f.getAttributes().get(AttributeType.FIELD_VALUE);
-					if (fv != null && fv.getValue() != null) {
-						if (accFlags.isPublic()) {
-							dex.getConstFields().put(fv.getValue(), f);
-						}
-						constFields.put(fv.getValue(), f);
-					}
-				}
-			}
+		if (offset == 0) {
+			return;
 		}
+		Dex.Section section = dex.openSection(offset);
+		StaticValuesParser parser = new StaticValuesParser(dex, section);
+		parser.processFields(staticFields);
+
+		// process const fields
+		root().getConstValues().processConstFields(this, staticFields);
 	}
 
 	private void parseClassSignature() {
@@ -173,18 +181,18 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 			// parse class generic map
 			genericMap = sp.consumeGenericMap();
 			// parse super class signature
-			superClass = ClassInfo.fromType(sp.consumeType());
+			superClass = sp.consumeType();
 			// parse interfaces signatures
 			for (int i = 0; i < interfaces.size(); i++) {
 				ArgType type = sp.consumeType();
 				if (type != null) {
-					interfaces.set(i, ClassInfo.fromType(type));
+					interfaces.set(i, type);
 				} else {
 					break;
 				}
 			}
 		} catch (JadxRuntimeException e) {
-			LOG.error("Class signature parse error: " + this, e);
+			LOG.error("Class signature parse error: {}", this, e);
 		}
 	}
 
@@ -198,20 +206,50 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 						field.setType(gType);
 					}
 				} catch (JadxRuntimeException e) {
-					LOG.error("Field signature parse error: " + field, e);
+					LOG.error("Field signature parse error: {}", field, e);
 				}
 			}
 		}
 	}
 
+	private void addSourceFilenameAttr(String fileName) {
+		if (fileName == null) {
+			return;
+		}
+		if (fileName.endsWith(".java")) {
+			fileName = fileName.substring(0, fileName.length() - 5);
+		}
+		if (fileName.isEmpty()
+				|| fileName.equals("SourceFile")
+				|| fileName.equals("\"")) {
+			return;
+		}
+		if (clsInfo != null) {
+			String name = clsInfo.getShortName();
+			if (fileName.equals(name)) {
+				return;
+			}
+			if (fileName.contains("$")
+					&& fileName.endsWith("$" + name)) {
+				return;
+			}
+			ClassInfo parentClass = clsInfo.getTopParentClass();
+			if (parentClass != null && fileName.equals(parentClass.getShortName())) {
+				return;
+			}
+		}
+		this.addAttr(new SourceFileAttr(fileName));
+		LOG.debug("Class '{}' compiled from '{}'", this, fileName);
+	}
+
 	@Override
-	public void load() throws DecodeException {
+	public void load() {
 		for (MethodNode mth : getMethods()) {
 			try {
 				mth.load();
-			} catch (DecodeException e) {
-				LOG.error("Method load error", e);
-				mth.getAttributes().add(new JadxErrorAttr(e));
+			} catch (Exception e) {
+				LOG.error("Method load error: {}", mth, e);
+				mth.addAttr(new JadxErrorAttr(e));
 			}
 		}
 		for (ClassNode innerCls : getInnerClasses()) {
@@ -229,11 +267,19 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		}
 	}
 
-	public ClassInfo getSuperClass() {
+	private void buildCache() {
+		mthInfoMap = new HashMap<MethodInfo, MethodNode>(methods.size());
+		for (MethodNode mth : methods) {
+			mthInfoMap.put(mth.getMethodInfo(), mth);
+		}
+	}
+
+	@Nullable
+	public ArgType getSuperClass() {
 		return superClass;
 	}
 
-	public List<ClassInfo> getInterfaces() {
+	public List<ArgType> getInterfaces() {
 		return interfaces;
 	}
 
@@ -253,63 +299,30 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		return getConstField(obj, true);
 	}
 
+	@Nullable
 	public FieldNode getConstField(Object obj, boolean searchGlobal) {
-		ClassNode cn = this;
-		FieldNode field;
-		do {
-			field = cn.constFields.get(obj);
-		}
-		while (field == null
-				&& (cn.clsInfo.getParentClass() != null)
-				&& (cn = dex.resolveClass(cn.clsInfo.getParentClass())) != null);
-
-		if (field == null && searchGlobal) {
-			field = dex.getConstFields().get(obj);
-		}
-		return field;
+		return root().getConstValues().getConstField(this, obj, searchGlobal);
 	}
 
+	@Nullable
 	public FieldNode getConstFieldByLiteralArg(LiteralArg arg) {
-		PrimitiveType type = arg.getType().getPrimitiveType();
-		if (type == null) {
-			return null;
-		}
-		long literal = arg.getLiteral();
-		switch (type) {
-			case BOOLEAN:
-				return getConstField(literal == 1, false);
-			case CHAR:
-				return getConstField((char) literal, Math.abs(literal) > 1);
-			case BYTE:
-				return getConstField((byte) literal, Math.abs(literal) > 1);
-			case SHORT:
-				return getConstField((short) literal, Math.abs(literal) > 1);
-			case INT:
-				return getConstField((int) literal, Math.abs(literal) > 1);
-			case LONG:
-				return getConstField(literal, Math.abs(literal) > 1);
-			case FLOAT:
-				return getConstField(Float.intBitsToFloat((int) literal), true);
-			case DOUBLE:
-				return getConstField(Double.longBitsToDouble(literal), true);
-		}
-		return null;
+		return root().getConstValues().getConstFieldByLiteralArg(this, arg);
 	}
 
 	public FieldNode searchFieldById(int id) {
-		String name = FieldInfo.getNameById(dex, id);
+		return searchField(FieldInfo.fromDex(dex, id));
+	}
+
+	public FieldNode searchField(FieldInfo field) {
 		for (FieldNode f : fields) {
-			if (f.getName().equals(name)) {
+			if (f.getFieldInfo().equals(field)) {
 				return f;
 			}
 		}
 		return null;
 	}
 
-	public FieldNode searchField(FieldInfo field) {
-		return searchFieldByName(field.getName());
-	}
-
+	@TestOnly
 	public FieldNode searchFieldByName(String name) {
 		for (FieldNode f : fields) {
 			if (f.getName().equals(name)) {
@@ -320,12 +333,7 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 	}
 
 	public MethodNode searchMethod(MethodInfo mth) {
-		for (MethodNode m : methods) {
-			if (m.getMethodInfo().equals(mth)) {
-				return m;
-			}
-		}
-		return null;
+		return mthInfoMap.get(mth);
 	}
 
 	public MethodNode searchMethodByName(String shortId) {
@@ -354,6 +362,11 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		return parentClass;
 	}
 
+	public ClassNode getTopParentClass() {
+		ClassNode parent = getParentClass();
+		return parent == this ? this : parent.getParentClass();
+	}
+
 	public List<ClassNode> getInnerClasses() {
 		return innerClasses;
 	}
@@ -366,21 +379,26 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 	}
 
 	public boolean isEnum() {
-		return getAccessFlags().isEnum() && getSuperClass().getFullName().equals(Consts.CLASS_ENUM);
+		return getAccessFlags().isEnum()
+				&& getSuperClass() != null
+				&& getSuperClass().getObject().equals(ArgType.ENUM.getObject());
 	}
 
 	public boolean isAnonymous() {
 		return clsInfo.isInner()
-				&& getShortName().startsWith(Consts.ANONYMOUS_CLASS_PREFIX)
+				&& clsInfo.getAlias().getShortName().startsWith(Consts.ANONYMOUS_CLASS_PREFIX)
 				&& getDefaultConstructor() != null;
 	}
 
+	@Nullable
+	public MethodNode getClassInitMth() {
+		return searchMethodByName("<clinit>()V");
+	}
+
+	@Nullable
 	public MethodNode getDefaultConstructor() {
 		for (MethodNode mth : methods) {
-			if (mth.getAccessFlags().isConstructor()
-					&& mth.getMethodInfo().isConstructor()
-					&& (mth.getMethodInfo().getArgsCount() == 0
-					|| (mth.getArguments(false) != null && mth.getArguments(false).isEmpty()))) {
+			if (mth.isDefaultConstructor()) {
 				return mth;
 			}
 		}
@@ -391,28 +409,44 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		return accessFlags;
 	}
 
+	@Override
 	public DexNode dex() {
 		return dex;
 	}
 
-	public ClassInfo getClassInfo() {
-		return clsInfo;
-	}
-
-	public String getShortName() {
-		return clsInfo.getShortName();
-	}
-
-	public String getFullName() {
-		return clsInfo.getFullName();
-	}
-
-	public String getPackage() {
-		return clsInfo.getPackage();
+	@Override
+	public RootNode root() {
+		return dex.root();
 	}
 
 	public String getRawName() {
 		return clsInfo.getRawName();
+	}
+
+	/**
+	 * Internal class info (don't use in code generation and external api).
+	 */
+	public ClassInfo getClassInfo() {
+		return clsInfo;
+	}
+
+	/**
+	 * Class info for external usage (code generation and external api).
+	 */
+	public ClassInfo getAlias() {
+		return clsInfo.getAlias();
+	}
+
+	public String getShortName() {
+		return clsInfo.getAlias().getShortName();
+	}
+
+	public String getFullName() {
+		return clsInfo.getAlias().getFullName();
+	}
+
+	public String getPackage() {
+		return clsInfo.getAlias().getPackage();
 	}
 
 	public void setCode(CodeWriter code) {
@@ -423,8 +457,38 @@ public class ClassNode extends LineAttrNode implements ILoadable {
 		return code;
 	}
 
+	public ProcessState getState() {
+		return state;
+	}
+
+	public void setState(ProcessState state) {
+		this.state = state;
+	}
+
+	public Set<ClassNode> getDependencies() {
+		return dependencies;
+	}
+
+	@Override
+	public int hashCode() {
+		return clsInfo.hashCode();
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		if (this == o) {
+			return true;
+		}
+		if (o instanceof ClassNode) {
+			ClassNode other = (ClassNode) o;
+			return clsInfo.equals(other.clsInfo);
+		}
+		return false;
+
+	}
+
 	@Override
 	public String toString() {
-		return getFullName();
+		return clsInfo.getFullName();
 	}
 }

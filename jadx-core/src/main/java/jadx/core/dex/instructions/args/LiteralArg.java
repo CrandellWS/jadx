@@ -17,14 +17,14 @@ public final class LiteralArg extends InsnArg {
 			} else if (!type.isTypeKnown()
 					&& !type.contains(PrimitiveType.LONG)
 					&& !type.contains(PrimitiveType.DOUBLE)) {
-				ArgType m = ArgType.merge(type, ArgType.NARROW_NUMBERS);
+				ArgType m = ArgType.merge(null, type, ArgType.NARROW_NUMBERS);
 				if (m != null) {
 					type = m;
 				}
 			}
 		}
 		this.literal = value;
-		this.typedVar = new TypedVar(type);
+		this.type = type;
 	}
 
 	public long getLiteral() {
@@ -37,17 +37,17 @@ public final class LiteralArg extends InsnArg {
 	}
 
 	public boolean isInteger() {
-		PrimitiveType type = typedVar.getType().getPrimitiveType();
-		return (type == PrimitiveType.INT
+		PrimitiveType type = this.type.getPrimitiveType();
+		return type == PrimitiveType.INT
 				|| type == PrimitiveType.BYTE
 				|| type == PrimitiveType.CHAR
 				|| type == PrimitiveType.SHORT
-				|| type == PrimitiveType.LONG);
+				|| type == PrimitiveType.LONG;
 	}
 
 	@Override
 	public int hashCode() {
-		return (int) (literal ^ (literal >>> 32)) + 31 * getType().hashCode();
+		return (int) (literal ^ literal >>> 32) + 31 * getType().hashCode();
 	}
 
 	@Override
@@ -69,10 +69,10 @@ public final class LiteralArg extends InsnArg {
 			if (getType().equals(ArgType.BOOLEAN) && (value.equals("true") || value.equals("false"))) {
 				return value;
 			}
-			return "(" + value + " " + typedVar + ")";
+			return "(" + value + " " + type + ")";
 		} catch (JadxRuntimeException ex) {
 			// can't convert literal to string
-			return "(" + literal + " " + typedVar + ")";
+			return "(" + literal + " " + type + ")";
 		}
 	}
 }

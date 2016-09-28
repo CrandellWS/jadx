@@ -1,5 +1,6 @@
 package jadx.gui.ui;
 
+import jadx.gui.utils.TextStandardActions;
 import jadx.gui.utils.NLS;
 import jadx.gui.utils.Utils;
 
@@ -13,15 +14,20 @@ import javax.swing.text.BadLocationException;
 import java.awt.Color;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
 
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rtextarea.SearchContext;
 import org.fife.ui.rtextarea.SearchEngine;
+import org.fife.ui.rtextarea.SearchResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class SearchBar extends JToolBar {
 	private static final long serialVersionUID = 1836871286618633003L;
+
+	private static final Logger LOG = LoggerFactory.getLogger(SearchBar.class);
 
 	private static final Color COLOR_BG_ERROR = new Color(0xFFDFDE);
 	private static final Color COLOR_BG_WARN = new Color(0xFFFDD9);
@@ -47,15 +53,7 @@ class SearchBar extends JToolBar {
 		add(findLabel);
 
 		searchField = new JTextField(30);
-		searchField.addKeyListener(new KeyListener() {
-			@Override
-			public void keyTyped(KeyEvent e) {
-			}
-
-			@Override
-			public void keyPressed(KeyEvent e) {
-			}
-
+		searchField.addKeyListener(new KeyAdapter() {
 			@Override
 			public void keyReleased(KeyEvent e) {
 				switch (e.getKeyCode()) {
@@ -76,6 +74,7 @@ class SearchBar extends JToolBar {
 				search(1);
 			}
 		});
+		new TextStandardActions(searchField);
 		add(searchField);
 
 		JButton prevButton = new JButton(NLS.str("search.previous"));
@@ -145,31 +144,28 @@ class SearchBar extends JToolBar {
 	}
 
 	private void search(int direction) {
-		String text = searchField.getText();
-		if (text.length() == 0) {
+		String searchText = searchField.getText();
+		if (searchText == null
+				|| searchText.length() == 0
+				|| rTextArea.getText() == null) {
 			return;
 		}
 
-		boolean forward = (direction >= 0);
+		boolean forward = direction >= 0;
 		boolean matchCase = matchCaseCB.isSelected();
 		boolean regex = regexCB.isSelected();
 		boolean wholeWord = wholeWordCB.isSelected();
 
-		if (markAllCB.isSelected()) {
-			rTextArea.markAll(text, matchCase, wholeWord, regex);
-		} else {
-			rTextArea.clearMarkAllHighlights();
-		}
-
 		SearchContext context = new SearchContext();
-		context.setSearchFor(text);
+		context.setSearchFor(searchText);
 		context.setMatchCase(matchCase);
 		context.setRegularExpression(regex);
 		context.setSearchForward(forward);
 		context.setWholeWord(wholeWord);
+		context.setMarkAll(markAllCB.isSelected());
 
 		// TODO hack: move cursor before previous search for not jump to next occurrence
-		if (direction == 0 && !searchField.getBackground().equals(COLOR_BG_ERROR)) {
+		if (direction == 0 && !COLOR_BG_ERROR.equals(searchField.getBackground())) {
 			try {
 				int caretPos = rTextArea.getCaretPosition();
 				int lineNum = rTextArea.getLineOfOffset(caretPos) - 1;
@@ -177,13 +173,13 @@ class SearchBar extends JToolBar {
 					rTextArea.setCaretPosition(rTextArea.getLineStartOffset(lineNum));
 				}
 			} catch (BadLocationException e) {
-				e.printStackTrace();
+				LOG.error("Caret move error", e);
 			}
 		}
 
-		boolean found = SearchEngine.find(rTextArea, context);
-		if (!found) {
-			int pos = SearchEngine.getNextMatchPos(text, rTextArea.getText(), forward, matchCase, wholeWord);
+		SearchResult result = SearchEngine.find(rTextArea, context);
+		if (!result.wasFound()) {
+			int pos = SearchEngine.getNextMatchPos(searchText, rTextArea.getText(), forward, matchCase, wholeWord);
 			if (pos != -1) {
 				rTextArea.setCaretPosition(forward ? 0 : rTextArea.getDocument().getLength() - 1);
 				search(direction);

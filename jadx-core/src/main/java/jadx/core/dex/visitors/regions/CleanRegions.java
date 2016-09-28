@@ -23,9 +23,9 @@ public class CleanRegions {
 		}
 		IRegionVisitor removeEmptyBlocks = new AbstractRegionVisitor() {
 			@Override
-			public void enterRegion(MethodNode mth, IRegion region) {
+			public boolean enterRegion(MethodNode mth, IRegion region) {
 				if (!(region instanceof Region)) {
-					return;
+					return true;
 				}
 
 				for (Iterator<IContainer> it = region.getSubBlocks().iterator(); it.hasNext(); ) {
@@ -42,8 +42,9 @@ public class CleanRegions {
 					}
 
 				}
+				return true;
 			}
 		};
-		DepthRegionTraversal.traverseAll(mth, removeEmptyBlocks);
+		DepthRegionTraversal.traverse(mth, removeEmptyBlocks);
 	}
 }

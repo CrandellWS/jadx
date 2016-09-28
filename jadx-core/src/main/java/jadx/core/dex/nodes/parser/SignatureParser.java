@@ -6,14 +6,18 @@ import jadx.core.dex.attributes.annotations.Annotation;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.utils.exceptions.JadxRuntimeException;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class SignatureParser {
+
+	private static final Logger LOG = LoggerFactory.getLogger(SignatureParser.class);
 	private static final char STOP_CHAR = 0;
 
 	private final String sign;
@@ -30,7 +34,7 @@ public class SignatureParser {
 
 	@SuppressWarnings("unchecked")
 	public static SignatureParser fromNode(IAttributeNode node) {
-		Annotation a = node.getAttributes().getAnnotation(Consts.DALVIK_SIGNATURE);
+		Annotation a = node.getAnnotation(Consts.DALVIK_SIGNATURE);
 		if (a == null) {
 			return null;
 		}
@@ -154,7 +158,13 @@ public class SignatureParser {
 		} while (ch != '<' && ch != ';');
 
 		if (ch == ';') {
-			return ArgType.object(incompleteType ? slice() : inclusiveSlice());
+			String obj;
+			if (incompleteType) {
+				obj = slice().replace('/', '.');
+			} else {
+				obj = inclusiveSlice();
+			}
+			return ArgType.object(obj);
 		} else {
 			// generic type start ('<')
 			String obj = slice();
@@ -179,7 +189,7 @@ public class SignatureParser {
 	}
 
 	private ArgType[] consumeGenericArgs() {
-		List<ArgType> list = new ArrayList<ArgType>(1);
+		List<ArgType> list = new LinkedList<ArgType>();
 		ArgType type;
 		do {
 			if (lookAhead('*')) {
@@ -208,7 +218,7 @@ public class SignatureParser {
 	 */
 	public Map<ArgType, List<ArgType>> consumeGenericMap() {
 		if (!lookAhead('<')) {
-			return null;
+			return Collections.emptyMap();
 		}
 		Map<ArgType, List<ArgType>> map = new LinkedHashMap<ArgType, List<ArgType>>(2);
 		consume('<');
@@ -217,6 +227,10 @@ public class SignatureParser {
 				break;
 			}
 			String id = consumeUntil(':');
+			if (id == null) {
+				LOG.error("Can't parse generic map: {}", sign);
+				return Collections.emptyMap();
+			}
 			tryConsume(':');
 			List<ArgType> types = consumeExtendsTypesList();
 			map.put(ArgType.genericType(id), types);

@@ -16,11 +16,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.android.dex.Dex;
+import com.android.dex.Dex.Section;
 
 public class AnnotationsParser {
 
-	private static final Annotation.Visibility[] VISIBILITIES = {
+	private static final Visibility[] VISIBILITIES = {
 			Visibility.BUILD,
 			Visibility.RUNTIME,
 			Visibility.SYSTEM
@@ -35,7 +35,7 @@ public class AnnotationsParser {
 	}
 
 	public void parse(int offset) throws DecodeException {
-		Dex.Section section = dex.openSection(offset);
+		Section section = dex.openSection(offset);
 
 		// TODO read as unsigned int
 		int classAnnotationsOffset = section.readInt();
@@ -44,49 +44,56 @@ public class AnnotationsParser {
 		int annotatedParametersCount = section.readInt();
 
 		if (classAnnotationsOffset != 0) {
-			cls.getAttributes().add(readAnnotationSet(classAnnotationsOffset));
+			cls.addAttr(readAnnotationSet(classAnnotationsOffset));
 		}
 
 		for (int i = 0; i < fieldsCount; i++) {
 			FieldNode f = cls.searchFieldById(section.readInt());
-			f.getAttributes().add(readAnnotationSet(section.readInt()));
+			f.addAttr(readAnnotationSet(section.readInt()));
 		}
 
 		for (int i = 0; i < annotatedMethodsCount; i++) {
 			MethodNode m = cls.searchMethodById(section.readInt());
-			m.getAttributes().add(readAnnotationSet(section.readInt()));
+			m.addAttr(readAnnotationSet(section.readInt()));
 		}
 
 		for (int i = 0; i < annotatedParametersCount; i++) {
 			MethodNode mth = cls.searchMethodById(section.readInt());
 			// read annotation ref list
-			Dex.Section ss = dex.openSection(section.readInt());
+			Section ss = dex.openSection(section.readInt());
 			int size = ss.readInt();
 			MethodParameters params = new MethodParameters(size);
 			for (int j = 0; j < size; j++) {
 				params.getParamList().add(readAnnotationSet(ss.readInt()));
 			}
-			mth.getAttributes().add(params);
+			mth.addAttr(params);
 		}
 	}
 
 	private AnnotationsList readAnnotationSet(int offset) throws DecodeException {
-		Dex.Section section = dex.openSection(offset);
+		if (offset == 0) {
+			return AnnotationsList.EMPTY;
+		}
+		Section section = dex.openSection(offset);
 		int size = section.readInt();
+		if (size == 0) {
+			return AnnotationsList.EMPTY;
+		}
 		List<Annotation> list = new ArrayList<Annotation>(size);
 		for (int i = 0; i < size; i++) {
-			Dex.Section anSection = dex.openSection(section.readInt());
+			Section anSection = dex.openSection(section.readInt());
 			Annotation a = readAnnotation(dex, anSection, true);
 			list.add(a);
 		}
 		return new AnnotationsList(list);
 	}
 
-	public static Annotation readAnnotation(DexNode dex, Dex.Section s, boolean readVisibility) throws DecodeException {
+	public static Annotation readAnnotation(DexNode dex, Section s, boolean readVisibility) throws DecodeException {
 		EncValueParser parser = new EncValueParser(dex, s);
 		Visibility visibility = null;
 		if (readVisibility) {
-			visibility = VISIBILITIES[s.readByte()];
+			byte v = s.readByte();
+			visibility = VISIBILITIES[v];
 		}
 		int typeIndex = s.readUleb128();
 		int size = s.readUleb128();

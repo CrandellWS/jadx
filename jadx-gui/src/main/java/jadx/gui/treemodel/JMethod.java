@@ -1,6 +1,7 @@
 package jadx.gui.treemodel;
 
 import jadx.api.JavaMethod;
+import jadx.api.JavaNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.gui.utils.OverlayIcon;
@@ -30,8 +31,17 @@ public class JMethod extends JNode {
 	}
 
 	@Override
+	public JavaNode getJavaNode() {
+		return mth;
+	}
+
+	@Override
 	public JClass getJParent() {
 		return jParent;
+	}
+
+	public ArgType getReturnType() {
+		return mth.getReturnType();
 	}
 
 	@Override
@@ -57,14 +67,13 @@ public class JMethod extends JNode {
 		return icon;
 	}
 
-	@Override
-	public String toString() {
+	String makeBaseString() {
 		if (mth.isClassInit()) {
 			return "{...}";
 		}
 		StringBuilder base = new StringBuilder();
 		if (mth.isConstructor()) {
-			base.append(mth.getDeclaringClass().getShortName());
+			base.append(mth.getDeclaringClass().getName());
 		} else {
 			base.append(mth.getName());
 		}
@@ -76,6 +85,27 @@ public class JMethod extends JNode {
 			}
 		}
 		base.append(')');
-		return Utils.typeFormat(base.toString(), mth.getReturnType());
+		return base.toString();
+	}
+
+	@Override
+	public String makeString() {
+		return Utils.typeFormat(makeBaseString(), getReturnType());
+	}
+
+	@Override
+	public String makeLongString() {
+		String name = mth.getDeclaringClass().getFullName() + "." + makeBaseString();
+		return Utils.typeFormat(name, getReturnType());
+	}
+
+	@Override
+	public int hashCode() {
+		return mth.hashCode();
+	}
+
+	@Override
+	public boolean equals(Object o) {
+		return this == o || o instanceof JMethod && mth.equals(((JMethod) o).mth);
 	}
 }

@@ -36,12 +36,35 @@ public class InvokeNode extends InsnNode {
 		}
 	}
 
+	private InvokeNode(MethodInfo mth, InvokeType invokeType, int argsCount) {
+		super(InsnType.INVOKE, argsCount);
+		this.mth = mth;
+		this.type = invokeType;
+	}
+
 	public InvokeType getInvokeType() {
 		return type;
 	}
 
 	public MethodInfo getCallMth() {
 		return mth;
+	}
+
+	@Override
+	public InsnNode copy() {
+		return copyCommonParams(new InvokeNode(mth, type, getArgsCount()));
+	}
+
+	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof InvokeNode) || !super.isSame(obj)) {
+			return false;
+		}
+		InvokeNode other = (InvokeNode) obj;
+		return type == other.type && mth.equals(other.mth);
 	}
 
 	@Override

@@ -12,8 +12,9 @@ public abstract class TracedRegionVisitor implements IRegionVisitor {
 	protected final Deque<IRegion> regionStack = new ArrayDeque<IRegion>();
 
 	@Override
-	public void enterRegion(MethodNode mth, IRegion region) {
+	public boolean enterRegion(MethodNode mth, IRegion region) {
 		regionStack.push(region);
+		return true;
 	}
 
 	@Override

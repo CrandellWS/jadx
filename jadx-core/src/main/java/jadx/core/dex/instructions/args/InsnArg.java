@@ -1,8 +1,13 @@
 package jadx.core.dex.instructions.args;
 
+import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.utils.InsnUtils;
 
+import java.util.ArrayList;
+import java.util.List;
+
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,6 +21,7 @@ public abstract class InsnArg extends Typed {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InsnArg.class);
 
+	@Nullable("Null for method arguments")
 	protected InsnNode parentInsn;
 
 	public static RegisterArg reg(int regNum, ArgType type) {
@@ -26,10 +32,12 @@ public abstract class InsnArg extends Typed {
 		return reg(InsnUtils.getArg(insn, argNum), type);
 	}
 
-	public static RegisterArg immutableReg(int regNum, ArgType type) {
-		RegisterArg r = new RegisterArg(regNum);
-		r.forceSetTypedVar(new ImmutableTypedVar(type));
-		return r;
+	public static TypeImmutableArg typeImmutableReg(int regNum, ArgType type) {
+		return new TypeImmutableArg(regNum, type);
+	}
+
+	public static RegisterArg reg(int regNum, ArgType type, boolean typeImmutable) {
+		return typeImmutable ? new TypeImmutableArg(regNum, type) : new RegisterArg(regNum, type);
 	}
 
 	public static LiteralArg lit(long literal, ArgType type) {
@@ -64,11 +72,12 @@ public abstract class InsnArg extends Typed {
 		return false;
 	}
 
+	@Nullable
 	public InsnNode getParentInsn() {
 		return parentInsn;
 	}
 
-	public void setParentInsn(InsnNode parentInsn) {
+	public void setParentInsn(@Nullable InsnNode parentInsn) {
 		this.parentInsn = parentInsn;
 	}
 
@@ -78,18 +87,35 @@ public abstract class InsnArg extends Typed {
 			return null;
 		}
 		if (parent == insn) {
-			LOG.debug("Can't wrap instruction info itself: " + insn);
+			LOG.debug("Can't wrap instruction info itself: {}", insn);
 			return null;
 		}
+		int i = getArgIndex(parent, this);
+		if (i == -1) {
+			return null;
+		}
+		insn.add(AFlag.WRAPPED);
+		InsnArg arg = wrapArg(insn);
+		parent.setArg(i, arg);
+		return arg;
+	}
+
+	public static void updateParentInsn(InsnNode fromInsn, InsnNode toInsn) {
+		List<RegisterArg> args = new ArrayList<RegisterArg>();
+		fromInsn.getRegisterArgs(args);
+		for (RegisterArg reg : args) {
+			reg.setParentInsn(toInsn);
+		}
+	}
+
+	private static int getArgIndex(InsnNode parent, InsnArg arg) {
 		int count = parent.getArgsCount();
 		for (int i = 0; i < count; i++) {
-			if (parent.getArg(i) == this) {
-				InsnArg arg = wrapArg(insn);
-				parent.setArg(i, arg);
-				return arg;
+			if (parent.getArg(i) == arg) {
+				return i;
 			}
 		}
-		return null;
+		return -1;
 	}
 
 	public static InsnArg wrapArg(InsnNode insn) {
@@ -101,11 +127,11 @@ public abstract class InsnArg extends Typed {
 				break;
 			case CONST_STR:
 				arg = wrap(insn);
-				arg.getTypedVar().forceSetType(ArgType.STRING);
+				arg.setType(ArgType.STRING);
 				break;
 			case CONST_CLASS:
 				arg = wrap(insn);
-				arg.getTypedVar().forceSetType(ArgType.CLASS);
+				arg.setType(ArgType.CLASS);
 				break;
 			default:
 				arg = wrap(insn);
@@ -115,7 +141,7 @@ public abstract class InsnArg extends Typed {
 	}
 
 	public boolean isThis() {
-		// must be implemented in RegisterArg
+		// must be implemented in RegisterArg and MthParameterArg
 		return false;
 	}
 }

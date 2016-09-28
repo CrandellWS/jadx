@@ -8,7 +8,7 @@ public class AccessInfo {
 
 	private final int accFlags;
 
-	public static enum AFType {
+	public enum AFType {
 		CLASS, FIELD, METHOD
 	}
 
@@ -25,16 +25,15 @@ public class AccessInfo {
 
 	public AccessInfo remove(int flag) {
 		if (containsFlag(flag)) {
-			return new AccessInfo(accFlags - flag, type);
-		} else {
-			return this;
+			return new AccessInfo(accFlags & ~flag, type);
 		}
+		return this;
 	}
 
 	public AccessInfo getVisibility() {
-		int f = (accFlags & AccessFlags.ACC_PUBLIC)
-				| (accFlags & AccessFlags.ACC_PROTECTED)
-				| (accFlags & AccessFlags.ACC_PRIVATE);
+		int f = accFlags & AccessFlags.ACC_PUBLIC
+				| accFlags & AccessFlags.ACC_PROTECTED
+				| accFlags & AccessFlags.ACC_PRIVATE;
 		return new AccessInfo(f, type);
 	}
 

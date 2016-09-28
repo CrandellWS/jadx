@@ -1,9 +1,8 @@
 package jadx.core.dex.visitors;
 
-import jadx.core.dex.attributes.AttributeFlag;
-import jadx.core.dex.attributes.AttributeType;
-import jadx.core.dex.attributes.AttributesList;
-import jadx.core.dex.attributes.FieldReplaceAttr;
+import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.FieldReplaceAttr;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.info.FieldInfo;
@@ -12,17 +11,24 @@ import jadx.core.dex.instructions.IndexInsnNode;
 import jadx.core.dex.instructions.InsnType;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.instructions.args.RegisterArg;
+import jadx.core.dex.instructions.args.SSAVar;
 import jadx.core.dex.instructions.mods.ConstructorInsn;
 import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.FieldNode;
 import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
+import jadx.core.utils.BlockUtils;
 import jadx.core.utils.InstructionRemover;
 import jadx.core.utils.exceptions.JadxException;
 
 import java.util.List;
 
+@JadxVisitor(
+		name = "ClassModifier",
+		desc = "Remove synthetic classes, methods and fields",
+		runAfter = ModVisitor.class
+)
 public class ClassModifier extends AbstractVisitor {
 
 	@Override
@@ -33,15 +39,21 @@ public class ClassModifier extends AbstractVisitor {
 		if (cls.getAccessFlags().isSynthetic()
 				&& cls.getFields().isEmpty()
 				&& cls.getMethods().isEmpty()) {
-			cls.getAttributes().add(AttributeFlag.DONT_GENERATE);
+			cls.add(AFlag.DONT_GENERATE);
 			return false;
 		}
 		removeSyntheticFields(cls);
 		removeSyntheticMethods(cls);
 		removeEmptyMethods(cls);
 
-		checkFieldsInit(cls);
+		markAnonymousClass(cls);
 		return false;
+	}
+
+	private void markAnonymousClass(ClassNode cls) {
+		if (cls.isAnonymous()) {
+			cls.add(AFlag.ANONYMOUS_CLASS);
+		}
 	}
 
 	private static void removeSyntheticFields(ClassNode cls) {
@@ -51,10 +63,12 @@ public class ClassModifier extends AbstractVisitor {
 		// remove fields if it is synthetic and type is a outer class
 		for (FieldNode field : cls.getFields()) {
 			if (field.getAccessFlags().isSynthetic() && field.getType().isObject()) {
-				ClassNode fieldsCls = cls.dex().resolveClass(ClassInfo.fromType(field.getType()));
+				ClassInfo clsInfo = ClassInfo.fromType(cls.dex(), field.getType());
+				ClassNode fieldsCls = cls.dex().resolveClass(clsInfo);
 				ClassInfo parentClass = cls.getClassInfo().getParentClass();
 				if (fieldsCls != null
-						&& parentClass.equals(fieldsCls.getClassInfo())) {
+						&& parentClass.equals(fieldsCls.getClassInfo())
+						&& field.getName().startsWith("this$") /* TODO: don't check name */) {
 					int found = 0;
 					for (MethodNode mth : cls.getMethods()) {
 						if (removeFieldUsageFromConstructor(mth, field, fieldsCls)) {
@@ -62,10 +76,8 @@ public class ClassModifier extends AbstractVisitor {
 						}
 					}
 					if (found != 0) {
-						AttributesList attributes = field.getAttributes();
-						FieldInfo replace = new FieldInfo(parentClass, "this", parentClass.getType());
-						attributes.add(new FieldReplaceAttr(replace, true));
-						attributes.add(AttributeFlag.DONT_GENERATE);
+						field.addAttr(new FieldReplaceAttr(parentClass));
+						field.add(AFlag.DONT_GENERATE);
 					}
 				}
 			}
@@ -73,11 +85,11 @@ public class ClassModifier extends AbstractVisitor {
 	}
 
 	private static boolean removeFieldUsageFromConstructor(MethodNode mth, FieldNode field, ClassNode fieldsCls) {
-		if (!mth.getAccessFlags().isConstructor()) {
+		if (mth.isNoCode() || !mth.getAccessFlags().isConstructor()) {
 			return false;
 		}
 		List<RegisterArg> args = mth.getArguments(false);
-		if (args.isEmpty()) {
+		if (args.isEmpty() || mth.contains(AFlag.SKIP_FIRST_ARG)) {
 			return false;
 		}
 		RegisterArg arg = args.get(0);
@@ -99,13 +111,12 @@ public class ClassModifier extends AbstractVisitor {
 			return false;
 		}
 		mth.removeFirstArgument();
-		InstructionRemover.remove(block, insn);
+		InstructionRemover.remove(mth, block, insn);
 		// other arg usage -> wrap with IGET insn
-		List<InsnArg> useList = arg.getTypedVar().getUseList();
-		if (useList.size() > 1) {
+		if (arg.getSVar().getUseCount() != 0) {
 			InsnNode iget = new IndexInsnNode(InsnType.IGET, fieldInfo, 1);
 			iget.addArg(insn.getArg(1));
-			for (InsnArg insnArg : useList) {
+			for (InsnArg insnArg : arg.getSVar().getUseList()) {
 				insnArg.wrapInstruction(iget);
 			}
 		}
@@ -114,20 +125,35 @@ public class ClassModifier extends AbstractVisitor {
 
 	private static void removeSyntheticMethods(ClassNode cls) {
 		for (MethodNode mth : cls.getMethods()) {
+			if (mth.isNoCode()) {
+				continue;
+			}
 			AccessInfo af = mth.getAccessFlags();
 			// remove bridge methods
 			if (af.isBridge() && af.isSynthetic() && !isMethodUniq(cls, mth)) {
 				// TODO add more checks before method deletion
-				mth.getAttributes().add(AttributeFlag.DONT_GENERATE);
+				mth.add(AFlag.DONT_GENERATE);
+				continue;
 			}
-			// remove synthetic constructor for inner non-static classes
+			// remove synthetic constructor for inner classes
 			if (af.isSynthetic() && af.isConstructor() && mth.getBasicBlocks().size() == 2) {
 				List<InsnNode> insns = mth.getBasicBlocks().get(0).getInstructions();
 				if (insns.size() == 1 && insns.get(0).getType() == InsnType.CONSTRUCTOR) {
 					ConstructorInsn constr = (ConstructorInsn) insns.get(0);
-					if (constr.isThis() && mth.getArguments(false).size() >= 1) {
-						mth.removeFirstArgument();
-						mth.getAttributes().add(AttributeFlag.DONT_GENERATE);
+					List<RegisterArg> args = mth.getArguments(false);
+					if (constr.isThis() && !args.isEmpty()) {
+						// remove first arg for non-static class (references to outer class)
+						if (args.get(0).getType().equals(cls.getParentClass().getClassInfo().getType())) {
+							args.get(0).add(AFlag.SKIP_ARG);
+						}
+						// remove unused args
+						for (RegisterArg arg : args) {
+							SSAVar sVar = arg.getSVar();
+							if (sVar != null && sVar.getUseCount() == 0) {
+								arg.add(AFlag.SKIP_ARG);
+							}
+						}
+						mth.add(AFlag.DONT_GENERATE);
 					}
 				}
 			}
@@ -155,52 +181,13 @@ public class ClassModifier extends AbstractVisitor {
 
 			// remove public empty constructors
 			if (af.isConstructor()
-					&& af.isPublic()
-					&& mth.getArguments(false).isEmpty()) {
+					&& (af.isPublic() || af.isStatic())
+					&& mth.getArguments(false).isEmpty()
+					&& !mth.contains(AType.JADX_ERROR)) {
 				List<BlockNode> bb = mth.getBasicBlocks();
-				if (bb == null || bb.isEmpty() || allBlocksEmpty(bb)) {
-					mth.getAttributes().add(AttributeFlag.DONT_GENERATE);
+				if (bb == null || bb.isEmpty() || BlockUtils.isAllBlocksEmpty(bb)) {
+					mth.add(AFlag.DONT_GENERATE);
 				}
-			}
-		}
-	}
-
-	private static boolean allBlocksEmpty(List<BlockNode> blocks) {
-		for (BlockNode block : blocks) {
-			if (block.getInstructions().size() != 0) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	private static void checkFieldsInit(ClassNode cls) {
-		MethodNode clinit = cls.searchMethodByName("<clinit>()V");
-		if (clinit == null
-				|| !clinit.getAccessFlags().isStatic()
-				|| clinit.isNoCode()) {
-			return;
-		}
-
-		for (BlockNode block : clinit.getBasicBlocks()) {
-			for (InsnNode insn : block.getInstructions()) {
-				if (insn.getType() == InsnType.SPUT) {
-					processStaticFieldAssign(cls, (IndexInsnNode) insn);
-				}
-			}
-		}
-	}
-
-	/**
-	 * Remove field initialization if it assign in "<clinit>" method
-	 */
-	private static void processStaticFieldAssign(ClassNode cls, IndexInsnNode insn) {
-		FieldInfo field = (FieldInfo) insn.getIndex();
-		String thisClass = cls.getFullName();
-		if (field.getDeclClass().getFullName().equals(thisClass)) {
-			FieldNode fn = cls.searchField(field);
-			if (fn != null && fn.getAccessFlags().isFinal()) {
-				fn.getAttributes().remove(AttributeType.FIELD_VALUE);
 			}
 		}
 	}

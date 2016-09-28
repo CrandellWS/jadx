@@ -5,8 +5,11 @@ import jadx.core.dex.nodes.IContainer;
 import jadx.core.dex.nodes.IRegion;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.trycatch.ExceptionHandler;
+import jadx.core.utils.exceptions.JadxOverflowException;
 
 public class DepthRegionTraversal {
+
+	private static final int ITERATIVE_LIMIT = 500;
 
 	private DepthRegionTraversal() {
 	}
@@ -15,17 +18,33 @@ public class DepthRegionTraversal {
 		traverseInternal(mth, visitor, mth.getRegion());
 	}
 
-	public static void traverseAll(MethodNode mth, IRegionVisitor visitor) {
-		traverse(mth, visitor);
-		for (ExceptionHandler h : mth.getExceptionHandlers()) {
-			traverseInternal(mth, visitor, h.getHandlerRegion());
-		}
+	public static void traverseIterative(MethodNode mth, IRegionIterativeVisitor visitor) {
+		boolean repeat;
+		int k = 0;
+		do {
+			repeat = traverseIterativeStepInternal(mth, visitor, mth.getRegion());
+			if (k++ > ITERATIVE_LIMIT) {
+				throw new JadxOverflowException("Iterative traversal limit reached, method: " + mth);
+			}
+		} while (repeat);
 	}
 
-	public static void traverseAllIterative(MethodNode mth, IRegionIterativeVisitor visitor) {
+	public static void traverseIncludingExcHandlers(MethodNode mth, IRegionIterativeVisitor visitor) {
 		boolean repeat;
+		int k = 0;
 		do {
-			repeat = traverseAllIterativeIntern(mth, visitor);
+			repeat = traverseIterativeStepInternal(mth, visitor, mth.getRegion());
+			if (!repeat) {
+				for (ExceptionHandler h : mth.getExceptionHandlers()) {
+					repeat = traverseIterativeStepInternal(mth, visitor, h.getHandlerRegion());
+					if (repeat) {
+						break;
+					}
+				}
+			}
+			if (k++ > ITERATIVE_LIMIT) {
+				throw new JadxOverflowException("Iterative traversal limit reached, method: " + mth);
+			}
 		} while (repeat);
 	}
 
@@ -34,34 +53,24 @@ public class DepthRegionTraversal {
 			visitor.processBlock(mth, (IBlock) container);
 		} else if (container instanceof IRegion) {
 			IRegion region = (IRegion) container;
-			visitor.enterRegion(mth, region);
-			for (IContainer subCont : region.getSubBlocks()) {
-				traverseInternal(mth, visitor, subCont);
+			if (visitor.enterRegion(mth, region)) {
+				for (IContainer subCont : region.getSubBlocks()) {
+					traverseInternal(mth, visitor, subCont);
+				}
 			}
 			visitor.leaveRegion(mth, region);
 		}
 	}
 
-	private static boolean traverseAllIterativeIntern(MethodNode mth, IRegionIterativeVisitor visitor) {
-		if (traverseIterativeInternal(mth, visitor, mth.getRegion())) {
-			return true;
-		}
-		for (ExceptionHandler h : mth.getExceptionHandlers()) {
-			if (traverseIterativeInternal(mth, visitor, h.getHandlerRegion())) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public static boolean traverseIterativeInternal(MethodNode mth, IRegionIterativeVisitor visitor, IContainer container) {
+	private static boolean traverseIterativeStepInternal(MethodNode mth, IRegionIterativeVisitor visitor,
+			IContainer container) {
 		if (container instanceof IRegion) {
 			IRegion region = (IRegion) container;
 			if (visitor.visitRegion(mth, region)) {
 				return true;
 			}
 			for (IContainer subCont : region.getSubBlocks()) {
-				if (traverseIterativeInternal(mth, visitor, subCont)) {
+				if (traverseIterativeStepInternal(mth, visitor, subCont)) {
 					return true;
 				}
 			}

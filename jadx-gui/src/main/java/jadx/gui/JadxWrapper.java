@@ -1,14 +1,15 @@
 package jadx.gui;
 
-import jadx.api.Decompiler;
 import jadx.api.IJadxArgs;
+import jadx.api.JadxDecompiler;
 import jadx.api.JavaClass;
 import jadx.api.JavaPackage;
+import jadx.api.ResourceFile;
 import jadx.core.utils.exceptions.DecodeException;
+import jadx.core.utils.exceptions.JadxException;
 
 import javax.swing.ProgressMonitor;
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -18,21 +19,21 @@ import org.slf4j.LoggerFactory;
 public class JadxWrapper {
 	private static final Logger LOG = LoggerFactory.getLogger(JadxWrapper.class);
 
-	private final Decompiler decompiler;
+	private final JadxDecompiler decompiler;
 	private File openFile;
 
 	public JadxWrapper(IJadxArgs jadxArgs) {
-		this.decompiler = new Decompiler(jadxArgs);
+		this.decompiler = new JadxDecompiler(jadxArgs);
 	}
 
 	public void openFile(File file) {
 		this.openFile = file;
 		try {
 			this.decompiler.loadFile(file);
-		} catch (IOException e) {
-			LOG.error("Error open file: " + file, e);
 		} catch (DecodeException e) {
-			LOG.error("Error decode file: " + file, e);
+			LOG.error("Error decode file: {}", file, e);
+		} catch (JadxException e) {
+			LOG.error("Error open file: {}", file, e);
 		}
 	}
 
@@ -42,7 +43,7 @@ public class JadxWrapper {
 			public void run() {
 				try {
 					decompiler.setOutputDir(dir);
-					ThreadPoolExecutor ex = decompiler.getSaveExecutor();
+					ThreadPoolExecutor ex = (ThreadPoolExecutor) decompiler.getSaveExecutor();
 					ex.shutdown();
 					while (ex.isTerminating()) {
 						long total = ex.getTaskCount();
@@ -53,7 +54,7 @@ public class JadxWrapper {
 					progressMonitor.close();
 					LOG.info("done");
 				} catch (InterruptedException e) {
-					e.printStackTrace();
+					LOG.error("Save interrupted", e);
 				}
 			}
 		};
@@ -66,6 +67,10 @@ public class JadxWrapper {
 
 	public List<JavaPackage> getPackages() {
 		return decompiler.getPackages();
+	}
+
+	public List<ResourceFile> getResources() {
+		return decompiler.getResources();
 	}
 
 	public File getOpenFile() {

@@ -1,5 +1,6 @@
 package jadx.core.clsp;
 
+import jadx.api.JadxArgs;
 import jadx.core.dex.nodes.RootNode;
 import jadx.core.utils.exceptions.DecodeException;
 import jadx.core.utils.files.InputFile;
@@ -35,33 +36,38 @@ public class ConvertToClsSet {
 			if (f.isDirectory()) {
 				addFilesFromDirectory(f, inputFiles);
 			} else {
-				inputFiles.add(new InputFile(f));
+				InputFile.addFilesFrom(f, inputFiles);
 			}
 		}
 		for (InputFile inputFile : inputFiles) {
-			LOG.info("Loaded: " + inputFile.getFile());
+			LOG.info("Loaded: {}", inputFile.getFile());
 		}
 
-		RootNode root = new RootNode();
+		RootNode root = new RootNode(new JadxArgs());
 		root.load(inputFiles);
 
 		ClsSet set = new ClsSet();
 		set.load(root);
 		set.save(output);
-		LOG.info("Output: " + output);
+		LOG.info("Output: {}", output);
 		LOG.info("done");
 	}
 
-	private static void addFilesFromDirectory(File dir, List<InputFile> inputFiles) throws IOException, DecodeException {
+	private static void addFilesFromDirectory(File dir, List<InputFile> inputFiles) {
 		File[] files = dir.listFiles();
+		if (files == null) {
+			return;
+		}
 		for (File file : files) {
 			if (file.isDirectory()) {
 				addFilesFromDirectory(file, inputFiles);
-			}
-			if (file.getName().endsWith(".dex")) {
-				inputFiles.add(new InputFile(file));
+			} else {
+				try {
+					InputFile.addFilesFrom(file, inputFiles);
+				} catch (Exception e) {
+					LOG.warn("Skip file: {}, load error: {}", file, e.getMessage());
+				}
 			}
 		}
 	}
-
 }

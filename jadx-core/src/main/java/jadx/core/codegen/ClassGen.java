@@ -1,27 +1,31 @@
 package jadx.core.codegen;
 
-import jadx.core.Consts;
+import jadx.api.IJadxArgs;
+import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.AttrNode;
-import jadx.core.dex.attributes.AttributeFlag;
-import jadx.core.dex.attributes.AttributeType;
-import jadx.core.dex.attributes.EnumClassAttr;
-import jadx.core.dex.attributes.EnumClassAttr.EnumField;
-import jadx.core.dex.attributes.SourceFileAttr;
+import jadx.core.dex.attributes.nodes.EnumClassAttr;
+import jadx.core.dex.attributes.nodes.EnumClassAttr.EnumField;
+import jadx.core.dex.attributes.nodes.SourceFileAttr;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.instructions.args.ArgType;
-import jadx.core.dex.instructions.args.InsnArg;
+import jadx.core.dex.instructions.args.PrimitiveType;
+import jadx.core.dex.instructions.mods.ConstructorInsn;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.FieldNode;
+import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
-import jadx.core.dex.nodes.parser.FieldValueAttr;
+import jadx.core.dex.nodes.parser.FieldInitAttr;
+import jadx.core.dex.nodes.parser.FieldInitAttr.InitType;
 import jadx.core.utils.ErrorsCounter;
 import jadx.core.utils.Utils;
 import jadx.core.utils.exceptions.CodegenException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -37,18 +41,35 @@ import com.android.dx.rop.code.AccessFlags;
 public class ClassGen {
 	private static final Logger LOG = LoggerFactory.getLogger(ClassGen.class);
 
+	public static final Comparator<MethodNode> METHOD_LINE_COMPARATOR = new Comparator<MethodNode>() {
+		@Override
+		public int compare(MethodNode a, MethodNode b) {
+			return Utils.compare(a.getSourceLine(), b.getSourceLine());
+		}
+	};
+
 	private final ClassNode cls;
 	private final ClassGen parentGen;
 	private final AnnotationGen annotationGen;
 	private final boolean fallback;
+	private final boolean showInconsistentCode;
 
 	private final Set<ClassInfo> imports = new HashSet<ClassInfo>();
-	private int clsDeclLine = 0;
+	private int clsDeclLine;
 
-	public ClassGen(ClassNode cls, ClassGen parentClsGen, boolean fallback) {
+	public ClassGen(ClassNode cls, IJadxArgs jadxArgs) {
+		this(cls, null, jadxArgs.isFallbackMode(), jadxArgs.isShowInconsistentCode());
+	}
+
+	public ClassGen(ClassNode cls, ClassGen parentClsGen) {
+		this(cls, parentClsGen, parentClsGen.fallback, parentClsGen.showInconsistentCode);
+	}
+
+	public ClassGen(ClassNode cls, ClassGen parentClsGen, boolean fallback, boolean showBadCode) {
 		this.cls = cls;
 		this.parentGen = parentClsGen;
 		this.fallback = fallback;
+		this.showInconsistentCode = showBadCode;
 
 		this.annotationGen = new AnnotationGen(cls, this);
 	}
@@ -62,17 +83,15 @@ public class ClassGen {
 		addClassCode(clsBody);
 
 		CodeWriter clsCode = new CodeWriter();
-
 		if (!"".equals(cls.getPackage())) {
 			clsCode.add("package ").add(cls.getPackage()).add(';');
 			clsCode.newLine();
 		}
-
 		int importsCount = imports.size();
 		if (importsCount != 0) {
 			List<String> sortImports = new ArrayList<String>(importsCount);
 			for (ClassInfo ic : imports) {
-				sortImports.add(ic.getFullName());
+				sortImports.add(ic.getAlias().getFullName());
 			}
 			Collections.sort(sortImports);
 
@@ -84,16 +103,15 @@ public class ClassGen {
 			sortImports.clear();
 			imports.clear();
 		}
-
 		clsCode.add(clsBody);
 		return clsCode;
 	}
 
 	public void addClassCode(CodeWriter code) throws CodegenException {
-		if (cls.getAttributes().contains(AttributeFlag.DONT_GENERATE)) {
+		if (cls.contains(AFlag.DONT_GENERATE)) {
 			return;
 		}
-		if (cls.getAttributes().contains(AttributeFlag.INCONSISTENT_CODE)) {
+		if (cls.contains(AFlag.INCONSISTENT_CODE)) {
 			code.startLine("// jadx: inconsistent code");
 		}
 		addClassDeclaration(code);
@@ -103,13 +121,22 @@ public class ClassGen {
 	public void addClassDeclaration(CodeWriter clsCode) {
 		AccessInfo af = cls.getAccessFlags();
 		if (af.isInterface()) {
-			af = af.remove(AccessFlags.ACC_ABSTRACT);
+			af = af.remove(AccessFlags.ACC_ABSTRACT)
+					.remove(AccessFlags.ACC_STATIC);
 		} else if (af.isEnum()) {
-			af = af.remove(AccessFlags.ACC_FINAL).remove(AccessFlags.ACC_ABSTRACT);
+			af = af.remove(AccessFlags.ACC_FINAL)
+					.remove(AccessFlags.ACC_ABSTRACT)
+					.remove(AccessFlags.ACC_STATIC);
+		}
+
+		// 'static' and 'private' modifier not allowed for top classes (not inner)
+		if (!cls.getAlias().isInner()) {
+			af = af.remove(AccessFlags.ACC_STATIC).remove(AccessFlags.ACC_PRIVATE);
 		}
 
 		annotationGen.addForClass(clsCode);
 		insertSourceFileInfo(clsCode, cls);
+		insertRenameInfo(clsCode, cls);
 		clsCode.startLine(af.makeString());
 		if (af.isInterface()) {
 			if (af.isAnnotation()) {
@@ -121,27 +148,30 @@ public class ClassGen {
 		} else {
 			clsCode.add("class ");
 		}
+		clsCode.attachDefinition(cls);
 		clsCode.add(cls.getShortName());
 
 		addGenericMap(clsCode, cls.getGenericMap());
 		clsCode.add(' ');
 
-		ClassInfo sup = cls.getSuperClass();
+		ArgType sup = cls.getSuperClass();
 		if (sup != null
-				&& !sup.getFullName().equals(Consts.CLASS_OBJECT)
-				&& !sup.getFullName().equals(Consts.CLASS_ENUM)) {
-			clsCode.add("extends ").add(useClass(sup)).add(' ');
+				&& !sup.equals(ArgType.OBJECT)
+				&& !sup.getObject().equals(ArgType.ENUM.getObject())) {
+			clsCode.add("extends ");
+			useClass(clsCode, sup);
+			clsCode.add(' ');
 		}
 
-		if (cls.getInterfaces().size() > 0 && !af.isAnnotation()) {
+		if (!cls.getInterfaces().isEmpty() && !af.isAnnotation()) {
 			if (cls.getAccessFlags().isInterface()) {
 				clsCode.add("extends ");
 			} else {
 				clsCode.add("implements ");
 			}
-			for (Iterator<ClassInfo> it = cls.getInterfaces().iterator(); it.hasNext(); ) {
-				ClassInfo interf = it.next();
-				clsCode.add(useClass(interf));
+			for (Iterator<ArgType> it = cls.getInterfaces().iterator(); it.hasNext(); ) {
+				ArgType interf = it.next();
+				useClass(clsCode, interf);
 				if (it.hasNext()) {
 					clsCode.add(", ");
 				}
@@ -150,7 +180,6 @@ public class ClassGen {
 				clsCode.add(' ');
 			}
 		}
-		clsCode.attachDefinition(cls);
 	}
 
 	public boolean addGenericMap(CodeWriter code, Map<ArgType, List<ArgType>> gmap) {
@@ -165,12 +194,20 @@ public class ClassGen {
 			if (i != 0) {
 				code.add(", ");
 			}
-			code.add(useClass(type));
+			if (type.isGenericType()) {
+				code.add(type.getObject());
+			} else {
+				useClass(code, type);
+			}
 			if (list != null && !list.isEmpty()) {
 				code.add(" extends ");
 				for (Iterator<ArgType> it = list.iterator(); it.hasNext(); ) {
 					ArgType g = it.next();
-					code.add(useClass(g));
+					if (g.isGenericType()) {
+						code.add(g.getObject());
+					} else {
+						useClass(code, g);
+					}
 					if (it.hasNext()) {
 						code.add(" & ");
 					}
@@ -195,34 +232,64 @@ public class ClassGen {
 
 	private void addInnerClasses(CodeWriter code, ClassNode cls) throws CodegenException {
 		for (ClassNode innerCls : cls.getInnerClasses()) {
-			if (!innerCls.isAnonymous()) {
-				ClassGen inClGen = new ClassGen(innerCls, getParentGen(), fallback);
-				code.newLine();
-				inClGen.addClassCode(code);
-				imports.addAll(inClGen.getImports());
+			if (innerCls.contains(AFlag.DONT_GENERATE)
+					|| innerCls.contains(AFlag.ANONYMOUS_CLASS)) {
+				continue;
+			}
+			ClassGen inClGen = new ClassGen(innerCls, getParentGen());
+			code.newLine();
+			inClGen.addClassCode(code);
+			imports.addAll(inClGen.getImports());
+		}
+	}
+
+	private boolean isInnerClassesPresents() {
+		for (ClassNode innerCls : cls.getInnerClasses()) {
+			if (!innerCls.contains(AFlag.ANONYMOUS_CLASS)) {
+				return true;
 			}
 		}
+		return false;
 	}
 
 	private void addMethods(CodeWriter code) {
-		for (MethodNode mth : cls.getMethods()) {
-			if (!mth.getAttributes().contains(AttributeFlag.DONT_GENERATE)) {
-				try {
-					if (code.getLine() != clsDeclLine) {
-						code.newLine();
-					}
-					addMethod(code, mth);
-				} catch (Exception e) {
-					String msg = ErrorsCounter.methodError(mth, "Method generation error", e);
-					code.startLine("/* " + msg + CodeWriter.NL + Utils.getStackTrace(e) + " */");
-				}
+		List<MethodNode> methods = sortMethodsByLine(cls.getMethods());
+		for (MethodNode mth : methods) {
+			if (mth.contains(AFlag.DONT_GENERATE)) {
+				continue;
+			}
+			if (code.getLine() != clsDeclLine) {
+				code.newLine();
+			}
+			try {
+				addMethod(code, mth);
+			} catch (Exception e) {
+				code.newLine().add("/*");
+				code.newLine().add(ErrorsCounter.methodError(mth, "Method generation error", e));
+				code.newLine().add(Utils.getStackTrace(e));
+				code.newLine().add("*/");
 			}
 		}
 	}
 
+	private static List<MethodNode> sortMethodsByLine(List<MethodNode> methods) {
+		List<MethodNode> out = new ArrayList<MethodNode>(methods);
+		Collections.sort(out, METHOD_LINE_COMPARATOR);
+		return out;
+	}
+
+	private boolean isMethodsPresents() {
+		for (MethodNode mth : cls.getMethods()) {
+			if (!mth.contains(AFlag.DONT_GENERATE)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private void addMethod(CodeWriter code, MethodNode mth) throws CodegenException {
-		MethodGen mthGen = new MethodGen(this, mth);
 		if (mth.getAccessFlags().isAbstract() || mth.getAccessFlags().isNative()) {
+			MethodGen mthGen = new MethodGen(this, mth);
 			mthGen.addDefinition(code);
 			if (cls.getAccessFlags().isAnnotation()) {
 				Object def = annotationGen.getAnnotationDefaultValue(mth.getName());
@@ -233,11 +300,21 @@ public class ClassGen {
 			}
 			code.add(';');
 		} else {
-			boolean badCode = mth.getAttributes().contains(AttributeFlag.INCONSISTENT_CODE);
+			boolean badCode = mth.contains(AFlag.INCONSISTENT_CODE);
 			if (badCode) {
 				code.startLine("/* JADX WARNING: inconsistent code. */");
 				code.startLine("/* Code decompiled incorrectly, please refer to instructions dump. */");
 				ErrorsCounter.methodError(mth, "Inconsistent code");
+				if (showInconsistentCode) {
+					mth.remove(AFlag.INCONSISTENT_CODE);
+					badCode = false;
+				}
+			}
+			MethodGen mthGen;
+			if (badCode || mth.contains(AType.JADX_ERROR) || fallback) {
+				mthGen = MethodGen.getFallbackMethodGen(mth);
+			} else {
+				mthGen = new MethodGen(this, mth);
 			}
 			if (mthGen.addDefinition(code)) {
 				code.add(' ');
@@ -245,7 +322,11 @@ public class ClassGen {
 			code.add('{');
 			code.incIndent();
 			insertSourceFileInfo(code, mth);
-			mthGen.addInstructions(code);
+			if (fallback) {
+				mthGen.addFallbackMethodCode(code);
+			} else {
+				mthGen.addInstructions(code);
+			}
 			code.decIndent();
 			code.startLine('}');
 		}
@@ -254,153 +335,197 @@ public class ClassGen {
 	private void addFields(CodeWriter code) throws CodegenException {
 		addEnumFields(code);
 		for (FieldNode f : cls.getFields()) {
-			if (f.getAttributes().contains(AttributeFlag.DONT_GENERATE)) {
+			if (f.contains(AFlag.DONT_GENERATE)) {
 				continue;
 			}
 			annotationGen.addForField(code, f);
 			code.startLine(f.getAccessFlags().makeString());
-			code.add(TypeGen.translate(this, f.getType()));
+			useType(code, f.getType());
 			code.add(' ');
-			code.add(f.getName());
-			FieldValueAttr fv = (FieldValueAttr) f.getAttributes().get(AttributeType.FIELD_VALUE);
+			code.attachDefinition(f);
+			code.add(f.getAlias());
+			FieldInitAttr fv = f.get(AType.FIELD_INIT);
 			if (fv != null) {
 				code.add(" = ");
 				if (fv.getValue() == null) {
-					code.add(TypeGen.literalToString(0, f.getType()));
+					code.add(TypeGen.literalToString(0, f.getType(), cls));
 				} else {
-					annotationGen.encodeValue(code, fv.getValue());
+					if (fv.getValueType() == InitType.CONST) {
+						annotationGen.encodeValue(code, fv.getValue());
+					} else if (fv.getValueType() == InitType.INSN) {
+						InsnGen insnGen = makeInsnGen(fv.getInsnMth());
+						addInsnBody(insnGen, code, fv.getInsn());
+					}
 				}
 			}
 			code.add(';');
-			code.attachDefinition(f);
 		}
 	}
 
-	private void addEnumFields(CodeWriter code) throws CodegenException {
-		EnumClassAttr enumFields = (EnumClassAttr) cls.getAttributes().get(AttributeType.ENUM_CLASS);
-		if (enumFields != null) {
-			InsnGen igen = null;
-			for (Iterator<EnumField> it = enumFields.getFields().iterator(); it.hasNext(); ) {
-				EnumField f = it.next();
-				code.startLine(f.getName());
-				if (f.getArgs().size() != 0) {
-					code.add('(');
-					for (Iterator<InsnArg> aIt = f.getArgs().iterator(); aIt.hasNext(); ) {
-						InsnArg arg = aIt.next();
-						if (igen == null) {
-							// don't init mth gen if this is simple enum
-							MethodGen mthGen = new MethodGen(this, enumFields.getStaticMethod());
-							igen = new InsnGen(mthGen, false);
-						}
-						igen.addArg(code, arg);
-						if (aIt.hasNext()) {
-							code.add(", ");
-						}
-					}
-					code.add(')');
-				}
-				if (f.getCls() != null) {
-					new ClassGen(f.getCls(), this, fallback).addClassBody(code);
-				}
-				if (it.hasNext()) {
-					code.add(',');
-				}
+	private boolean isFieldsPresents() {
+		for (FieldNode field : cls.getFields()) {
+			if (!field.contains(AFlag.DONT_GENERATE)) {
+				return true;
 			}
+		}
+		return false;
+	}
+
+	private void addEnumFields(CodeWriter code) throws CodegenException {
+		EnumClassAttr enumFields = cls.get(AType.ENUM_CLASS);
+		if (enumFields == null) {
+			return;
+		}
+		InsnGen igen = null;
+		for (Iterator<EnumField> it = enumFields.getFields().iterator(); it.hasNext(); ) {
+			EnumField f = it.next();
+			code.startLine(f.getField().getAlias());
+			ConstructorInsn constrInsn = f.getConstrInsn();
+			if (constrInsn.getArgsCount() > f.getStartArg()) {
+				if (igen == null) {
+					igen = makeInsnGen(enumFields.getStaticMethod());
+				}
+				MethodNode callMth = cls.dex().resolveMethod(constrInsn.getCallMth());
+				igen.generateMethodArguments(code, constrInsn, f.getStartArg(), callMth);
+			}
+			if (f.getCls() != null) {
+				code.add(' ');
+				new ClassGen(f.getCls(), this).addClassBody(code);
+			}
+			if (it.hasNext()) {
+				code.add(',');
+			}
+		}
+		if (isMethodsPresents() || isFieldsPresents() || isInnerClassesPresents()) {
 			if (enumFields.getFields().isEmpty()) {
 				code.startLine();
 			}
 			code.add(';');
-			code.newLine();
-		}
-	}
-
-	public String useClass(ArgType clsType) {
-		if (clsType.isGenericType()) {
-			return clsType.getObject();
-		}
-		return useClass(ClassInfo.fromType(clsType));
-	}
-
-	public String useClass(ClassInfo classInfo) {
-		String baseClass = useClassInternal(cls.getClassInfo(), classInfo);
-		ArgType type = classInfo.getType();
-		ArgType[] generics = type.getGenericTypes();
-		if (generics == null) {
-			return baseClass;
-		}
-
-		StringBuilder sb = new StringBuilder();
-		sb.append(baseClass);
-		sb.append('<');
-		int len = generics.length;
-		for (int i = 0; i < len; i++) {
-			if (i != 0) {
-				sb.append(", ");
+			if (isFieldsPresents()) {
+				code.startLine();
 			}
-			ArgType gt = generics[i];
-			ArgType wt = gt.getWildcardType();
-			if (wt != null) {
-				sb.append('?');
-				int bounds = gt.getWildcardBounds();
-				if (bounds != 0) {
-					sb.append(bounds == -1 ? " super " : " extends ");
-					sb.append(TypeGen.translate(this, wt));
-				}
+		}
+	}
+
+	private InsnGen makeInsnGen(MethodNode mth) {
+		MethodGen mthGen = new MethodGen(this, mth);
+		return new InsnGen(mthGen, false);
+	}
+
+	private void addInsnBody(InsnGen insnGen, CodeWriter code, InsnNode insn) {
+		try {
+			insnGen.makeInsn(insn, code, InsnGen.Flags.BODY_ONLY_NOWRAP);
+		} catch (Exception e) {
+			ErrorsCounter.classError(cls, "Failed to generate init code", e);
+		}
+	}
+
+	public void useType(CodeWriter code, ArgType type) {
+		PrimitiveType stype = type.getPrimitiveType();
+		if (stype == null) {
+			code.add(type.toString());
+		} else if (stype == PrimitiveType.OBJECT) {
+			if (type.isGenericType()) {
+				code.add(type.getObject());
 			} else {
-				sb.append(TypeGen.translate(this, gt));
+				useClass(code, type);
 			}
+		} else if (stype == PrimitiveType.ARRAY) {
+			useType(code, type.getArrayElement());
+			code.add("[]");
+		} else {
+			code.add(stype.getLongName());
 		}
-		sb.append('>');
-		return sb.toString();
 	}
 
-	private String useClassInternal(ClassInfo useCls, ClassInfo classInfo) {
-		String fullName = classInfo.getFullName();
+	public void useClass(CodeWriter code, ArgType type) {
+		useClass(code, ClassInfo.extCls(cls.dex(), type));
+		ArgType[] generics = type.getGenericTypes();
+		if (generics != null) {
+			code.add('<');
+			int len = generics.length;
+			for (int i = 0; i < len; i++) {
+				if (i != 0) {
+					code.add(", ");
+				}
+				ArgType gt = generics[i];
+				ArgType wt = gt.getWildcardType();
+				if (wt != null) {
+					code.add('?');
+					int bounds = gt.getWildcardBounds();
+					if (bounds != 0) {
+						code.add(bounds == -1 ? " super " : " extends ");
+						useType(code, wt);
+					}
+				} else {
+					useType(code, gt);
+				}
+			}
+			code.add('>');
+		}
+	}
+
+	public void useClass(CodeWriter code, ClassInfo classInfo) {
+		ClassNode classNode = cls.dex().resolveClass(classInfo);
+		if (classNode != null) {
+			code.attachAnnotation(classNode);
+		}
+		String baseClass = useClassInternal(cls.getAlias(), classInfo.getAlias());
+		code.add(baseClass);
+	}
+
+	private String useClassInternal(ClassInfo useCls, ClassInfo extClsInfo) {
+		String fullName = extClsInfo.getFullName();
 		if (fallback) {
 			return fullName;
 		}
-		String shortName = classInfo.getShortName();
-		if (classInfo.getPackage().equals("java.lang") && classInfo.getParentClass() == null) {
-			return shortName;
-		} else {
-			// don't add import if this class inner for current class
-			if (isClassInnerFor(classInfo, useCls)) {
-				return shortName;
-			}
-			// don't add import if this class from same package
-			if (classInfo.getPackage().equals(useCls.getPackage()) && !classInfo.isInner()) {
-				return shortName;
-			}
-			// don't add import if class not public (must be accessed using inheritance)
-			ClassNode classNode = cls.dex().resolveClass(classInfo);
-			if (classNode != null && !classNode.getAccessFlags().isPublic()) {
-				return shortName;
-			}
-			if (searchCollision(cls.dex(), useCls, shortName)) {
-				return fullName;
-			}
-			if (classInfo.getPackage().equals(useCls.getPackage())) {
-				fullName = classInfo.getNameWithoutPackage();
-			}
-			for (ClassInfo importCls : getImports()) {
-				if (!importCls.equals(classInfo)
-						&& importCls.getShortName().equals(shortName)) {
-					if (classInfo.isInner()) {
-						String parent = useClassInternal(useCls, classInfo.getParentClass());
-						return parent + "." + shortName;
-					} else {
-						return fullName;
-					}
-				}
-			}
-			addImport(classInfo);
+		String shortName = extClsInfo.getShortName();
+		if (extClsInfo.getPackage().equals("java.lang") && extClsInfo.getParentClass() == null) {
 			return shortName;
 		}
+		if (isClassInnerFor(useCls, extClsInfo)) {
+			return shortName;
+		}
+		if (isBothClassesInOneTopClass(useCls, extClsInfo)) {
+			return shortName;
+		}
+		// don't add import if this class from same package
+		if (extClsInfo.getPackage().equals(useCls.getPackage()) && !extClsInfo.isInner()) {
+			return shortName;
+		}
+		// don't add import if class not public (must be accessed using inheritance)
+		ClassNode classNode = cls.dex().resolveClass(extClsInfo);
+		if (classNode != null && !classNode.getAccessFlags().isPublic()) {
+			return shortName;
+		}
+		if (searchCollision(cls.dex(), useCls, extClsInfo)) {
+			return fullName;
+		}
+		// ignore classes from default package
+		if (extClsInfo.isDefaultPackage()) {
+			return shortName;
+		}
+		if (extClsInfo.getPackage().equals(useCls.getPackage())) {
+			fullName = extClsInfo.getNameWithoutPackage();
+		}
+		for (ClassInfo importCls : getImports()) {
+			if (!importCls.equals(extClsInfo)
+					&& importCls.getShortName().equals(shortName)) {
+				if (extClsInfo.isInner()) {
+					String parent = useClassInternal(useCls, extClsInfo.getParentClass().getAlias());
+					return parent + "." + shortName;
+				} else {
+					return fullName;
+				}
+			}
+		}
+		addImport(extClsInfo);
+		return shortName;
 	}
 
 	private void addImport(ClassInfo classInfo) {
 		if (parentGen != null) {
-			parentGen.addImport(classInfo);
+			parentGen.addImport(classInfo.getAlias());
 		} else {
 			imports.add(classInfo);
 		}
@@ -414,6 +539,16 @@ public class ClassGen {
 		}
 	}
 
+	private static boolean isBothClassesInOneTopClass(ClassInfo useCls, ClassInfo extClsInfo) {
+		ClassInfo a = useCls.getTopParentClass();
+		ClassInfo b = extClsInfo.getTopParentClass();
+		if (a != null) {
+			return a.equals(b);
+		}
+		// useCls - is a top class
+		return useCls.equals(b);
+	}
+
 	private static boolean isClassInnerFor(ClassInfo inner, ClassInfo parent) {
 		if (inner.isInner()) {
 			ClassInfo p = inner.getParentClass();
@@ -422,28 +557,38 @@ public class ClassGen {
 		return false;
 	}
 
-	private static boolean searchCollision(DexNode dex, ClassInfo useCls, String shortName) {
+	private static boolean searchCollision(DexNode dex, ClassInfo useCls, ClassInfo searchCls) {
 		if (useCls == null) {
 			return false;
 		}
+		String shortName = searchCls.getShortName();
 		if (useCls.getShortName().equals(shortName)) {
 			return true;
 		}
 		ClassNode classNode = dex.resolveClass(useCls);
 		if (classNode != null) {
 			for (ClassNode inner : classNode.getInnerClasses()) {
-				if (inner.getShortName().equals(shortName)) {
+				if (inner.getShortName().equals(shortName)
+						&& !inner.getAlias().equals(searchCls)) {
 					return true;
 				}
 			}
 		}
-		return searchCollision(dex, useCls.getParentClass(), shortName);
+		return searchCollision(dex, useCls.getParentClass(), searchCls);
 	}
 
 	private void insertSourceFileInfo(CodeWriter code, AttrNode node) {
-		SourceFileAttr sourceFileAttr = (SourceFileAttr) node.getAttributes().get(AttributeType.SOURCE_FILE);
+		SourceFileAttr sourceFileAttr = node.get(AType.SOURCE_FILE);
 		if (sourceFileAttr != null) {
-			code.startLine("// compiled from: ").add(sourceFileAttr.getFileName());
+			code.startLine("/* compiled from: ").add(sourceFileAttr.getFileName()).add(" */");
+		}
+	}
+
+	private void insertRenameInfo(CodeWriter code, ClassNode cls) {
+		ClassInfo classInfo = cls.getClassInfo();
+		if (classInfo.isRenamed()
+				&& !cls.getShortName().equals(cls.getAlias().getShortName())) {
+			code.startLine("/* renamed from: ").add(classInfo.getFullName()).add(" */");
 		}
 	}
 

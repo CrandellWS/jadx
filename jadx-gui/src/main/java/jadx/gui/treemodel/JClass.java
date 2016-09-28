@@ -3,12 +3,15 @@ package jadx.gui.treemodel;
 import jadx.api.JavaClass;
 import jadx.api.JavaField;
 import jadx.api.JavaMethod;
+import jadx.api.JavaNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.gui.utils.NLS;
 import jadx.gui.utils.Utils;
 
 import javax.swing.Icon;
 import javax.swing.ImageIcon;
+
+import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 
 public class JClass extends JNode {
 	private static final long serialVersionUID = -1239986875244097177L;
@@ -68,29 +71,42 @@ public class JClass extends JNode {
 		}
 	}
 
-	public String getCode() {
+	public String getContent() {
 		return cls.getCode();
+	}
+
+	@Override
+	public String getSyntaxName() {
+		return SyntaxConstants.SYNTAX_STYLE_JAVA;
 	}
 
 	@Override
 	public Icon getIcon() {
 		AccessInfo accessInfo = cls.getAccessInfo();
-
 		if (accessInfo.isEnum()) {
 			return ICON_ENUM;
-		} else if (accessInfo.isAnnotation()) {
-			return ICON_ANNOTATION;
-		} else if (accessInfo.isInterface()) {
-			return ICON_INTERFACE;
-		} else if (accessInfo.isProtected()) {
-			return ICON_CLASS_PROTECTED;
-		} else if (accessInfo.isPrivate()) {
-			return ICON_CLASS_PRIVATE;
-		} else if (accessInfo.isPublic()) {
-			return ICON_CLASS;
-		} else {
-			return ICON_CLASS_DEFAULT;
 		}
+		if (accessInfo.isAnnotation()) {
+			return ICON_ANNOTATION;
+		}
+		if (accessInfo.isInterface()) {
+			return ICON_INTERFACE;
+		}
+		if (accessInfo.isProtected()) {
+			return ICON_CLASS_PROTECTED;
+		}
+		if (accessInfo.isPrivate()) {
+			return ICON_CLASS_PRIVATE;
+		}
+		if (accessInfo.isPublic()) {
+			return ICON_CLASS;
+		}
+		return ICON_CLASS_DEFAULT;
+	}
+
+	@Override
+	public JavaNode getJavaNode() {
+		return cls;
 	}
 
 	@Override
@@ -107,8 +123,22 @@ public class JClass extends JNode {
 	}
 
 	@Override
+	public String getName() {
+		return cls.getName();
+	}
+
+	public String getFullName() {
+		return cls.getFullName();
+	}
+
+	@Override
 	public int getLine() {
 		return cls.getDecompiledLine();
+	}
+
+	@Override
+	public Integer getSourceLine(int line) {
+		return cls.getSourceLine(line);
 	}
 
 	@Override
@@ -122,7 +152,12 @@ public class JClass extends JNode {
 	}
 
 	@Override
-	public String toString() {
-		return cls.getShortName();
+	public String makeString() {
+		return cls.getName();
+	}
+
+	@Override
+	public String makeLongString() {
+		return cls.getFullName();
 	}
 }

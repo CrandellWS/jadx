@@ -2,34 +2,35 @@ package jadx.core.dex.nodes.parser;
 
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.RegisterArg;
-import jadx.core.dex.instructions.args.TypedVar;
 import jadx.core.dex.nodes.DexNode;
 import jadx.core.utils.InsnUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-final class LocalVar extends RegisterArg {
-
+final class LocalVar {
 	private static final Logger LOG = LoggerFactory.getLogger(LocalVar.class);
 
-	private boolean isEnd;
+	private final int regNum;
+	private String name;
+	private ArgType type;
 
+	private boolean isEnd;
 	private int startAddr;
 	private int endAddr;
 
 	public LocalVar(DexNode dex, int rn, int nameId, int typeId, int signId) {
-		super(rn);
-		String name = (nameId == DexNode.NO_INDEX ? null : dex.getString(nameId));
-		ArgType type = (typeId == DexNode.NO_INDEX ? null : dex.getType(typeId));
-		String sign = (signId == DexNode.NO_INDEX ? null : dex.getString(signId));
+		this.regNum = rn;
+		String name = nameId == DexNode.NO_INDEX ? null : dex.getString(nameId);
+		ArgType type = typeId == DexNode.NO_INDEX ? null : dex.getType(typeId);
+		String sign = signId == DexNode.NO_INDEX ? null : dex.getString(signId);
 
 		init(name, type, sign);
 	}
 
 	public LocalVar(RegisterArg arg) {
-		super(arg.getRegNum());
-		init(arg.getTypedVar().getName(), arg.getType(), null);
+		this.regNum = arg.getRegNum();
+		init(arg.getName(), arg.getType(), null);
 	}
 
 	private void init(String name, ArgType type, String sign) {
@@ -40,12 +41,11 @@ final class LocalVar extends RegisterArg {
 					type = gType;
 				}
 			} catch (Exception e) {
-				LOG.error("Can't parse signature for local variable: " + sign, e);
+				LOG.error("Can't parse signature for local variable: {}", sign, e);
 			}
 		}
-		TypedVar tv = new TypedVar(type);
-		tv.setName(name);
-		forceSetTypedVar(tv);
+		this.name = name;
+		this.type = type;
 	}
 
 	private boolean checkSignature(ArgType type, String sign, ArgType gType) {
@@ -56,11 +56,8 @@ final class LocalVar extends RegisterArg {
 				LOG.warn("Generic type in debug info not equals: {} != {}", type, gType);
 			}
 			apply = true;
-		} else if (el.isGenericType()) {
-			apply = true;
 		} else {
-			LOG.debug("Local var signature from debug info not generic: {}, parsed: {}", sign, gType);
-			apply = false;
+			apply = el.isGenericType();
 		}
 		return apply;
 	}
@@ -70,9 +67,32 @@ final class LocalVar extends RegisterArg {
 		this.startAddr = addr;
 	}
 
-	public void end(int addr, int line) {
-		this.isEnd = true;
-		this.endAddr = addr;
+	/**
+	 * Sets end address of local variable
+	 *
+	 * @param addr address
+	 * @param line source line
+	 * @return <b>true</b> if local variable was active, else <b>false</b>
+	 */
+	public boolean end(int addr, int line) {
+		if (!isEnd) {
+			this.isEnd = true;
+			this.endAddr = addr;
+			return true;
+		}
+		return false;
+	}
+
+	public int getRegNum() {
+		return regNum;
+	}
+
+	public String getName() {
+		return name;
+	}
+
+	public ArgType getType() {
+		return type;
 	}
 
 	public boolean isEnd() {
@@ -85,6 +105,16 @@ final class LocalVar extends RegisterArg {
 
 	public int getEndAddr() {
 		return endAddr;
+	}
+
+	@Override
+	public boolean equals(Object obj) {
+		return super.equals(obj);
+	}
+
+	@Override
+	public int hashCode() {
+		return super.hashCode();
 	}
 
 	@Override

@@ -1,87 +1,138 @@
 package jadx.core.dex.nodes;
 
+import jadx.api.IJadxArgs;
+import jadx.api.ResourceFile;
+import jadx.api.ResourceType;
+import jadx.api.ResourcesLoader;
 import jadx.core.clsp.ClspGraph;
 import jadx.core.dex.info.ClassInfo;
-import jadx.core.dex.instructions.args.ArgType;
+import jadx.core.dex.info.ConstStorage;
+import jadx.core.utils.ErrorsCounter;
+import jadx.core.utils.StringUtils;
+import jadx.core.utils.android.AndroidResourcesUtils;
 import jadx.core.utils.exceptions.DecodeException;
+import jadx.core.utils.exceptions.JadxException;
+import jadx.core.utils.files.DexFile;
 import jadx.core.utils.files.InputFile;
+import jadx.core.xmlgen.ResContainer;
+import jadx.core.xmlgen.ResTableParser;
+import jadx.core.xmlgen.ResourceStorage;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class RootNode {
-	private final Map<String, ClassNode> names = new HashMap<String, ClassNode>();
-	private List<DexNode> dexNodes;
+	private static final Logger LOG = LoggerFactory.getLogger(RootNode.class);
 
-	public void load(List<InputFile> dexFiles) throws DecodeException {
-		dexNodes = new ArrayList<DexNode>(dexFiles.size());
-		for (InputFile dex : dexFiles) {
-			DexNode dexNode;
-			try {
-				dexNode = new DexNode(this, dex);
-			} catch (Exception e) {
-				throw new DecodeException("Error decode file: " + dex, e);
+	private final ErrorsCounter errorsCounter = new ErrorsCounter();
+	private final IJadxArgs args;
+	private final StringUtils stringUtils;
+	private final ConstStorage constValues;
+
+	private List<DexNode> dexNodes;
+	@Nullable
+	private String appPackage;
+	private ClassNode appResClass;
+	private ClspGraph clsp;
+
+	public RootNode(IJadxArgs args) {
+		this.args = args;
+		this.stringUtils = new StringUtils(args);
+		this.constValues = new ConstStorage(args);
+	}
+
+	public void load(List<InputFile> inputFiles) throws DecodeException {
+		dexNodes = new ArrayList<DexNode>();
+		for (InputFile input : inputFiles) {
+			for (DexFile dexFile : input.getDexFiles()) {
+				try {
+					LOG.debug("Load: {}", dexFile);
+					DexNode dexNode = new DexNode(this, dexFile);
+					dexNodes.add(dexNode);
+				} catch (Exception e) {
+					throw new DecodeException("Error decode file: " + dexFile, e);
+				}
 			}
-			dexNodes.add(dexNode);
 		}
 		for (DexNode dexNode : dexNodes) {
 			dexNode.loadClasses();
 		}
+		initInnerClasses();
+	}
 
-		List<ClassNode> classes = new ArrayList<ClassNode>();
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				names.put(cls.getFullName(), cls);
+	public void loadResources(List<ResourceFile> resources) {
+		ResourceFile arsc = null;
+		for (ResourceFile rf : resources) {
+			if (rf.getType() == ResourceType.ARSC) {
+				arsc = rf;
+				break;
 			}
-			classes.addAll(dexNode.getClasses());
+		}
+		if (arsc == null) {
+			LOG.debug("'.arsc' file not found");
+			return;
+		}
+		final ResTableParser parser = new ResTableParser();
+		try {
+			ResourcesLoader.decodeStream(arsc, new ResourcesLoader.ResourceDecoder() {
+				@Override
+				public ResContainer decode(long size, InputStream is) throws IOException {
+					parser.decode(is);
+					return null;
+				}
+			});
+		} catch (JadxException e) {
+			LOG.error("Failed to parse '.arsc' file", e);
+			return;
 		}
 
+		ResourceStorage resStorage = parser.getResStorage();
+		constValues.setResourcesNames(resStorage.getResourcesNames());
+		appPackage = resStorage.getAppPackage();
+	}
+
+	public void initAppResClass() {
+		appResClass = AndroidResourcesUtils.searchAppResClass(this);
+	}
+
+	public void initClassPath() throws DecodeException {
 		try {
-			initClassPath(classes);
+			if (this.clsp == null) {
+				ClspGraph clsp = new ClspGraph();
+				clsp.load();
+
+				List<ClassNode> classes = new ArrayList<ClassNode>();
+				for (DexNode dexNode : dexNodes) {
+					classes.addAll(dexNode.getClasses());
+				}
+				clsp.addApp(classes);
+
+				this.clsp = clsp;
+			}
 		} catch (IOException e) {
 			throw new DecodeException("Error loading classpath", e);
 		}
-		initInnerClasses(classes);
 	}
 
-	private static void initClassPath(List<ClassNode> classes) throws IOException, DecodeException {
-		ClspGraph clsp = new ClspGraph();
-		clsp.load();
-		clsp.addApp(classes);
-
-		ArgType.setClsp(clsp);
-	}
-
-	private void initInnerClasses(List<ClassNode> classes) {
-		// move inner classes
-		List<ClassNode> inner = new ArrayList<ClassNode>();
-		for (ClassNode cls : classes) {
-			if (cls.getClassInfo().isInner()) {
-				inner.add(cls);
-			}
-		}
-		for (ClassNode cls : inner) {
-			ClassNode parent = resolveClass(cls.getClassInfo().getParentClass());
-			if (parent == null) {
-				names.remove(cls.getFullName());
-				cls.getClassInfo().notInner();
-				names.put(cls.getFullName(), cls);
-			} else {
-				parent.addInnerClass(cls);
-			}
+	private void initInnerClasses() {
+		for (DexNode dexNode : dexNodes) {
+			dexNode.initInnerClasses();
 		}
 	}
 
 	public List<ClassNode> getClasses(boolean includeInner) {
 		List<ClassNode> classes = new ArrayList<ClassNode>();
-		for (DexNode dexNode : dexNodes) {
-			for (ClassNode cls : dexNode.getClasses()) {
-				if (includeInner) {
-					classes.add(cls);
-				} else {
+		for (DexNode dex : dexNodes) {
+			if (includeInner) {
+				classes.addAll(dex.getClasses());
+			} else {
+				for (ClassNode cls : dex.getClasses()) {
 					if (!cls.getClassInfo().isInner()) {
 						classes.add(cls);
 					}
@@ -92,11 +143,58 @@ public class RootNode {
 	}
 
 	public ClassNode searchClassByName(String fullName) {
-		return names.get(fullName);
+		for (DexNode dexNode : dexNodes) {
+			ClassInfo clsInfo = ClassInfo.fromName(dexNode, fullName);
+			ClassNode cls = dexNode.resolveClass(clsInfo);
+			if (cls != null) {
+				return cls;
+			}
+		}
+		return null;
 	}
 
-	public ClassNode resolveClass(ClassInfo cls) {
-		String fullName = cls.getFullName();
-		return searchClassByName(fullName);
+	public List<ClassNode> searchClassByShortName(String shortName) {
+		List<ClassNode> list = new ArrayList<ClassNode>();
+		for (DexNode dexNode : dexNodes) {
+			for (ClassNode cls : dexNode.getClasses()) {
+				if (cls.getClassInfo().getShortName().equals(shortName)) {
+					list.add(cls);
+				}
+			}
+		}
+		return list;
+	}
+
+	public List<DexNode> getDexNodes() {
+		return dexNodes;
+	}
+
+	public ClspGraph getClsp() {
+		return clsp;
+	}
+
+	public ErrorsCounter getErrorsCounter() {
+		return errorsCounter;
+	}
+
+	@Nullable
+	public String getAppPackage() {
+		return appPackage;
+	}
+
+	public ClassNode getAppResClass() {
+		return appResClass;
+	}
+
+	public IJadxArgs getArgs() {
+		return args;
+	}
+
+	public StringUtils getStringUtils() {
+		return stringUtils;
+	}
+
+	public ConstStorage getConstValues() {
+		return constValues;
 	}
 }

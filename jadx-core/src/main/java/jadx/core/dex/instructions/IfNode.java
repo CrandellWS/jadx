@@ -4,6 +4,7 @@ import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.instructions.args.PrimitiveType;
 import jadx.core.dex.nodes.BlockNode;
+import jadx.core.dex.nodes.InsnNode;
 import jadx.core.utils.InsnUtils;
 
 import com.android.dx.io.instructions.DecodedInstruction;
@@ -13,9 +14,11 @@ import static jadx.core.utils.BlockUtils.selectOther;
 
 public class IfNode extends GotoNode {
 
+	// change default types priority
 	private static final ArgType ARG_TYPE = ArgType.unknown(
-			PrimitiveType.INT, PrimitiveType.OBJECT, PrimitiveType.ARRAY,
-			PrimitiveType.BOOLEAN, PrimitiveType.SHORT, PrimitiveType.CHAR);
+			PrimitiveType.INT,
+			PrimitiveType.OBJECT, PrimitiveType.ARRAY,
+			PrimitiveType.BOOLEAN, PrimitiveType.BYTE, PrimitiveType.SHORT, PrimitiveType.CHAR);
 
 	protected IfOp op;
 
@@ -68,6 +71,18 @@ public class IfNode extends GotoNode {
 
 	public BlockNode getElseBlock() {
 		return elseBlock;
+	}
+
+	@Override
+	public boolean isSame(InsnNode obj) {
+		if (this == obj) {
+			return true;
+		}
+		if (!(obj instanceof IfNode) || !super.isSame(obj)) {
+			return false;
+		}
+		IfNode other = (IfNode) obj;
+		return op == other.op;
 	}
 
 	@Override

@@ -1,7 +1,7 @@
 package jadx.core.codegen;
 
 import jadx.core.Consts;
-import jadx.core.dex.attributes.AttributeType;
+import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.IAttributeNode;
 import jadx.core.dex.attributes.annotations.Annotation;
 import jadx.core.dex.attributes.annotations.AnnotationsList;
@@ -42,8 +42,12 @@ public class AnnotationGen {
 	}
 
 	public void addForParameter(CodeWriter code, MethodParameters paramsAnnotations, int n) {
-		AnnotationsList aList = paramsAnnotations.getParamList().get(n);
-		if (aList == null || aList.size() == 0) {
+		List<AnnotationsList> paramList = paramsAnnotations.getParamList();
+		if (n >= paramList.size()) {
+			return;
+		}
+		AnnotationsList aList = paramList.get(n);
+		if (aList == null || aList.isEmpty()) {
 			return;
 		}
 		for (Annotation a : aList.getAll()) {
@@ -53,8 +57,8 @@ public class AnnotationGen {
 	}
 
 	private void add(IAttributeNode node, CodeWriter code) {
-		AnnotationsList aList = (AnnotationsList) node.getAttributes().get(AttributeType.ANNOTATION_LIST);
-		if (aList == null || aList.size() == 0) {
+		AnnotationsList aList = node.get(AType.ANNOTATION_LIST);
+		if (aList == null || aList.isEmpty()) {
 			return;
 		}
 		for (Annotation a : aList.getAll()) {
@@ -73,7 +77,7 @@ public class AnnotationGen {
 
 	private void formatAnnotation(CodeWriter code, Annotation a) {
 		code.add('@');
-		code.add(classGen.useClass(a.getType()));
+		classGen.useType(code, a.getType());
 		Map<String, Object> vl = a.getValues();
 		if (!vl.isEmpty()) {
 			code.add('(');
@@ -96,13 +100,13 @@ public class AnnotationGen {
 
 	@SuppressWarnings("unchecked")
 	public void addThrows(MethodNode mth, CodeWriter code) {
-		Annotation an = mth.getAttributes().getAnnotation(Consts.DALVIK_THROWS);
+		Annotation an = mth.getAnnotation(Consts.DALVIK_THROWS);
 		if (an != null) {
 			Object exs = an.getDefaultValue();
 			code.add(" throws ");
 			for (Iterator<ArgType> it = ((List<ArgType>) exs).iterator(); it.hasNext(); ) {
 				ArgType ex = it.next();
-				code.add(TypeGen.translate(classGen, ex));
+				classGen.useType(code, ex);
 				if (it.hasNext()) {
 					code.add(", ");
 				}
@@ -111,7 +115,7 @@ public class AnnotationGen {
 	}
 
 	public Object getAnnotationDefaultValue(String name) {
-		Annotation an = cls.getAttributes().getAnnotation(Consts.DALVIK_ANNOTATION_DEFAULT);
+		Annotation an = cls.getAnnotation(Consts.DALVIK_ANNOTATION_DEFAULT);
 		if (an != null) {
 			Annotation defAnnotation = (Annotation) an.getDefaultValue();
 			return defAnnotation.getValues().get(name);
@@ -126,11 +130,11 @@ public class AnnotationGen {
 			return;
 		}
 		if (val instanceof String) {
-			code.add(StringUtils.unescapeString((String) val));
+			code.add(getStringUtils().unescapeString((String) val));
 		} else if (val instanceof Integer) {
 			code.add(TypeGen.formatInteger((Integer) val));
 		} else if (val instanceof Character) {
-			code.add(StringUtils.unescapeChar((Character) val));
+			code.add(getStringUtils().unescapeChar((Character) val));
 		} else if (val instanceof Boolean) {
 			code.add(Boolean.TRUE.equals(val) ? "true" : "false");
 		} else if (val instanceof Float) {
@@ -144,14 +148,15 @@ public class AnnotationGen {
 		} else if (val instanceof Byte) {
 			code.add(TypeGen.formatByte((Byte) val));
 		} else if (val instanceof ArgType) {
-			code.add(TypeGen.translate(classGen, (ArgType) val)).add(".class");
+			classGen.useType(code, (ArgType) val);
+			code.add(".class");
 		} else if (val instanceof FieldInfo) {
 			// must be a static field
 			FieldInfo field = (FieldInfo) val;
-			code.add(InsnGen.makeStaticFieldAccess(field, classGen));
-		} else if (val instanceof List) {
+			InsnGen.makeStaticFieldAccess(code, field, classGen);
+		} else if (val instanceof Iterable) {
 			code.add('{');
-			Iterator<?> it = ((List) val).iterator();
+			Iterator<?> it = ((Iterable) val).iterator();
 			while (it.hasNext()) {
 				Object obj = it.next();
 				encodeValue(code, obj);
@@ -166,5 +171,9 @@ public class AnnotationGen {
 			// TODO: also can be method values
 			throw new JadxRuntimeException("Can't decode value: " + val + " (" + val.getClass() + ")");
 		}
+	}
+
+	private StringUtils getStringUtils() {
+		return cls.dex().root().getStringUtils();
 	}
 }

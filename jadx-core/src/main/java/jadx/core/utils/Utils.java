@@ -1,13 +1,15 @@
 package jadx.core.utils;
 
-import jadx.core.utils.exceptions.JadxRuntimeException;
+import jadx.api.JadxDecompiler;
 
-import java.io.File;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.Arrays;
 import java.util.Iterator;
 
 public class Utils {
+
+	public static final String JADX_API_PACKAGE = JadxDecompiler.class.getPackage().getName();
 
 	private Utils() {
 	}
@@ -16,47 +18,12 @@ public class Utils {
 		int last = obj.length() - 1;
 		if (obj.charAt(0) == 'L' && obj.charAt(last) == ';') {
 			return obj.substring(1, last).replace('/', '.');
-		} else {
-			return obj;
 		}
+		return obj;
 	}
 
 	public static String makeQualifiedObjectName(String obj) {
 		return 'L' + obj.replace('.', '/') + ';';
-	}
-
-	public static String escape(String str) {
-		int len = str.length();
-		StringBuilder sb = new StringBuilder(len);
-		for (int i = 0; i < len; i++) {
-			char c = str.charAt(i);
-			switch (c) {
-				case '.':
-				case '/':
-				case ';':
-				case '$':
-				case ' ':
-				case ',':
-				case '<':
-					sb.append('_');
-					break;
-
-				case '[':
-					sb.append('A');
-					break;
-
-				case ']':
-				case '>':
-				case '?':
-				case '*':
-					break;
-
-				default:
-					sb.append(c);
-					break;
-			}
-		}
-		return sb.toString();
 	}
 
 	public static String listToString(Iterable<?> list) {
@@ -89,20 +56,47 @@ public class Utils {
 	}
 
 	public static String getStackTrace(Throwable throwable) {
+		if (throwable == null) {
+			return "";
+		}
 		StringWriter sw = new StringWriter();
 		PrintWriter pw = new PrintWriter(sw, true);
+		filterRecursive(throwable);
 		throwable.printStackTrace(pw);
 		return sw.getBuffer().toString();
 	}
 
-	public static void makeDirsForFile(File file) {
-		File dir = file.getParentFile();
-		if (!dir.exists()) {
-			// if directory already created in other thread mkdirs will return false,
-			// so check dir existence again
-			if (!dir.mkdirs() && !dir.exists()) {
-				throw new JadxRuntimeException("Can't create directory " + dir);
+	private static void filterRecursive(Throwable th) {
+		try {
+			filter(th);
+		} catch (Exception e) {
+			// ignore filter exceptions
+		}
+		Throwable cause = th.getCause();
+		if (cause != null) {
+			filterRecursive(cause);
+		}
+	}
+
+	private static void filter(Throwable th) {
+		StackTraceElement[] stackTrace = th.getStackTrace();
+		int cutIndex = -1;
+		int length = stackTrace.length;
+		for (int i = 0; i < length; i++) {
+			StackTraceElement stackTraceElement = stackTrace[i];
+			if (stackTraceElement.getClassName().startsWith(JADX_API_PACKAGE)) {
+				cutIndex = i;
+			} else if (cutIndex > 0) {
+				cutIndex = i;
+				break;
 			}
 		}
+		if (cutIndex > 0 && cutIndex < length) {
+			th.setStackTrace(Arrays.copyOfRange(stackTrace, 0, cutIndex));
+		}
+	}
+
+	public static int compare(int x, int y) {
+		return x < y ? -1 : x == y ? 0 : 1;
 	}
 }

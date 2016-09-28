@@ -1,13 +1,15 @@
 package jadx.core.dex.instructions.args;
 
 import jadx.core.Consts;
-import jadx.core.clsp.ClspGraph;
+import jadx.core.dex.nodes.DexNode;
 import jadx.core.dex.nodes.parser.SignatureParser;
 import jadx.core.utils.Utils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+
+import org.jetbrains.annotations.Nullable;
 
 public abstract class ArgType {
 
@@ -24,6 +26,7 @@ public abstract class ArgType {
 	public static final ArgType OBJECT = object(Consts.CLASS_OBJECT);
 	public static final ArgType CLASS = object(Consts.CLASS_CLASS);
 	public static final ArgType STRING = object(Consts.CLASS_STRING);
+	public static final ArgType ENUM = object(Consts.CLASS_ENUM);
 	public static final ArgType THROWABLE = object(Consts.CLASS_THROWABLE);
 
 	public static final ArgType UNKNOWN = unknown(PrimitiveType.values());
@@ -41,12 +44,6 @@ public abstract class ArgType {
 	public static final ArgType WIDE = unknown(PrimitiveType.LONG, PrimitiveType.DOUBLE);
 
 	protected int hash;
-
-	private static ClspGraph clsp;
-
-	public static void setClsp(ClspGraph clsp) {
-		ArgType.clsp = clsp;
-	}
 
 	private static ArgType primitive(PrimitiveType stype) {
 		return new PrimitiveArg(stype);
@@ -89,9 +86,27 @@ public abstract class ArgType {
 	}
 
 	private abstract static class KnownType extends ArgType {
+
+		private static final PrimitiveType[] EMPTY_POSSIBLES = new PrimitiveType[0];
+
 		@Override
 		public boolean isTypeKnown() {
 			return true;
+		}
+
+		@Override
+		public boolean contains(PrimitiveType type) {
+			return getPrimitiveType() == type;
+		}
+
+		@Override
+		public ArgType selectFirst() {
+			return null;
+		}
+
+		@Override
+		public PrimitiveType[] getPossibleTypes() {
+			return EMPTY_POSSIBLES;
 		}
 	}
 
@@ -174,7 +189,7 @@ public abstract class ArgType {
 		private final int bounds;
 
 		public WildcardType(ArgType obj, int bound) {
-			super(ArgType.OBJECT.getObject());
+			super(OBJECT.getObject());
 			this.type = obj;
 			this.bounds = bound;
 		}
@@ -214,7 +229,7 @@ public abstract class ArgType {
 			if (bounds == 0) {
 				return "?";
 			}
-			return "? " + (bounds == -1 ? "super" : "extends") + " " + type.toString();
+			return "? " + (bounds == -1 ? "super" : "extends") + " " + type;
 		}
 	}
 
@@ -265,6 +280,7 @@ public abstract class ArgType {
 	}
 
 	private static final class ArrayArg extends KnownType {
+		public static final PrimitiveType[] ARRAY_POSSIBLES = new PrimitiveType[]{PrimitiveType.ARRAY};
 		private final ArgType arrayElement;
 
 		public ArrayArg(ArgType arrayElement) {
@@ -285,6 +301,21 @@ public abstract class ArgType {
 		@Override
 		public PrimitiveType getPrimitiveType() {
 			return PrimitiveType.ARRAY;
+		}
+
+		@Override
+		public boolean isTypeKnown() {
+			return arrayElement.isTypeKnown();
+		}
+
+		@Override
+		public ArgType selectFirst() {
+			return array(arrayElement.selectFirst());
+		}
+
+		@Override
+		public PrimitiveType[] getPossibleTypes() {
+			return ARRAY_POSSIBLES;
 		}
 
 		@Override
@@ -339,8 +370,10 @@ public abstract class ArgType {
 		@Override
 		public ArgType selectFirst() {
 			PrimitiveType f = possibleTypes[0];
-			if (f == PrimitiveType.OBJECT || f == PrimitiveType.ARRAY) {
-				return object(Consts.CLASS_OBJECT);
+			if (contains(PrimitiveType.OBJECT)) {
+				return OBJECT;
+			} else if (contains(PrimitiveType.ARRAY)) {
+				return array(OBJECT);
 			} else {
 				return primitive(f);
 			}
@@ -398,7 +431,7 @@ public abstract class ArgType {
 	}
 
 	/**
-	 * @see jadx.core.dex.instructions.args.ArgType.WildcardType#getWildcardBounds()
+	 * @see WildcardType#getWildcardBounds()
 	 */
 	public int getWildcardBounds() {
 		return 0;
@@ -424,43 +457,42 @@ public abstract class ArgType {
 		return this;
 	}
 
-	public boolean contains(PrimitiveType type) {
-		throw new UnsupportedOperationException();
-	}
+	public abstract boolean contains(PrimitiveType type);
 
-	public ArgType selectFirst() {
-		throw new UnsupportedOperationException();
-	}
+	public abstract ArgType selectFirst();
 
-	public PrimitiveType[] getPossibleTypes() {
-		return null;
-	}
+	public abstract PrimitiveType[] getPossibleTypes();
 
-	public static ArgType merge(ArgType a, ArgType b) {
-		if (b == null || a == null) {
+	@Nullable
+	public static ArgType merge(@Nullable DexNode dex, ArgType a, ArgType b) {
+		if (a == null || b == null) {
 			return null;
 		}
 		if (a.equals(b)) {
 			return a;
 		}
-		ArgType res = mergeInternal(a, b);
+		ArgType res = mergeInternal(dex, a, b);
 		if (res == null) {
-			res = mergeInternal(b, a); // swap
+			res = mergeInternal(dex, b, a); // swap
 		}
 		return res;
 	}
 
-	private static ArgType mergeInternal(ArgType a, ArgType b) {
+	private static ArgType mergeInternal(@Nullable DexNode dex, ArgType a, ArgType b) {
 		if (a == UNKNOWN) {
 			return b;
+		}
+		if (a.isArray()) {
+			return mergeArrays(dex, (ArrayArg) a, b);
+		} else if (b.isArray()) {
+			return mergeArrays(dex, (ArrayArg) b, a);
 		}
 		if (!a.isTypeKnown()) {
 			if (b.isTypeKnown()) {
 				if (a.contains(b.getPrimitiveType())) {
 					return b;
-				} else {
-					return null;
 				}
+				return null;
 			} else {
 				// both types unknown
 				List<PrimitiveType> types = new ArrayList<PrimitiveType>();
@@ -471,7 +503,8 @@ public abstract class ArgType {
 				}
 				if (types.isEmpty()) {
 					return null;
-				} else if (types.size() == 1) {
+				}
+				if (types.size() == 1) {
 					PrimitiveType nt = types.get(0);
 					if (nt == PrimitiveType.OBJECT || nt == PrimitiveType.ARRAY) {
 						return unknown(nt);
@@ -495,31 +528,18 @@ public abstract class ArgType {
 				String bObj = b.getObject();
 				if (aObj.equals(bObj)) {
 					return a.getGenericTypes() != null ? a : b;
-				} else if (aObj.equals(Consts.CLASS_OBJECT)) {
-					return b;
-				} else if (bObj.equals(Consts.CLASS_OBJECT)) {
-					return a;
-				} else {
-					// different objects
-					String obj = clsp.getCommonAncestor(aObj, bObj);
-					return obj == null ? null : object(obj);
 				}
-			}
-			if (a.isArray()) {
-				if (b.isArray()) {
-					ArgType ea = a.getArrayElement();
-					ArgType eb = b.getArrayElement();
-					if (ea.isPrimitive() && eb.isPrimitive()) {
-						return OBJECT;
-					} else {
-						ArgType res = merge(ea, eb);
-						return res == null ? null : ArgType.array(res);
-					}
-				} else if (b.equals(OBJECT)) {
-					return OBJECT;
-				} else {
+				if (aObj.equals(Consts.CLASS_OBJECT)) {
+					return b;
+				}
+				if (bObj.equals(Consts.CLASS_OBJECT)) {
+					return a;
+				}
+				if (dex == null) {
 					return null;
 				}
+				String obj = dex.root().getClsp().getCommonAncestor(aObj, bObj);
+				return obj == null ? null : object(obj);
 			}
 			if (a.isPrimitive() && b.isPrimitive() && a.getRegCount() == b.getRegCount()) {
 				return primitive(PrimitiveType.getSmaller(a.getPrimitiveType(), b.getPrimitiveType()));
@@ -528,15 +548,44 @@ public abstract class ArgType {
 		return null;
 	}
 
-	public static boolean isCastNeeded(ArgType from, ArgType to) {
+	private static ArgType mergeArrays(DexNode dex, ArrayArg array, ArgType b) {
+		if (b.isArray()) {
+			ArgType ea = array.getArrayElement();
+			ArgType eb = b.getArrayElement();
+			if (ea.isPrimitive() && eb.isPrimitive()) {
+				return OBJECT;
+			}
+			ArgType res = merge(dex, ea, eb);
+			return res == null ? null : array(res);
+		}
+		if (b.contains(PrimitiveType.ARRAY)) {
+			return array;
+		}
+		if (b.equals(OBJECT)) {
+			return OBJECT;
+		}
+		return null;
+	}
+
+	public static boolean isCastNeeded(DexNode dex, ArgType from, ArgType to) {
 		if (from.equals(to)) {
 			return false;
 		}
 		if (from.isObject() && to.isObject()
-				&& clsp.isImplements(from.getObject(), to.getObject())) {
+				&& dex.root().getClsp().isImplements(from.getObject(), to.getObject())) {
 			return false;
 		}
 		return true;
+	}
+
+	public static boolean isInstanceOf(DexNode dex, ArgType type, ArgType of) {
+		if (type.equals(of)) {
+			return true;
+		}
+		if (!type.isObject() || !of.isObject()) {
+			return false;
+		}
+		return dex.root().getClsp().isImplements(type.getObject(), of.getObject());
 	}
 
 	public static ArgType parse(String type) {

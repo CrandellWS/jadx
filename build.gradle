@@ -1,24 +1,35 @@
-ext.jadxVersion = file('version').readLines().get(0)
-version = jadxVersion
+buildscript {
+    repositories {
+        mavenCentral()
+        jcenter()
+    }
+}
+
+plugins {
+    id "com.github.kt3k.coveralls" version "2.3.1"
+    id "info.solidsoft.pitest" version "1.1.4"
+//    id "com.github.ben-manes.versions" version "0.8"
+}
 
 apply plugin: 'sonar-runner'
 
+ext.jadxVersion = file('version').readLines().get(0)
+version = jadxVersion
+
 subprojects {
     apply plugin: 'java'
+    apply plugin: 'groovy'
     apply plugin: 'jacoco'
-    apply plugin: 'idea'
-    apply plugin: 'eclipse'
-
-    sourceCompatibility = 1.6
-    targetCompatibility = 1.6
+    apply plugin: 'com.github.kt3k.coveralls'
 
     version = jadxVersion
 
-    gradle.projectsEvaluated {
-        tasks.withType(Compile) {
-            if (!"${it}".contains(':jadx-samples:')) {
-                options.compilerArgs << '-Xlint' << '-Xlint:unchecked' << '-Xlint:deprecation'
-            }
+    tasks.withType(JavaCompile) {
+        sourceCompatibility = JavaVersion.VERSION_1_6
+        targetCompatibility = JavaVersion.VERSION_1_6
+
+        if (!"$it".contains(':jadx-samples:')) {
+            options.compilerArgs << '-Xlint' << '-Xlint:unchecked' << '-Xlint:deprecation'
         }
     }
 
@@ -30,21 +41,42 @@ subprojects {
     }
 
     dependencies {
-        compile 'org.slf4j:slf4j-api:1.7.6'
-        testCompile 'junit:junit:4.11'
-        testCompile 'org.mockito:mockito-core:1.9.5'
-        testCompile 'ch.qos.logback:logback-classic:1.1.1'
+        compile 'org.slf4j:slf4j-api:1.7.10'
+
+        testCompile 'ch.qos.logback:logback-classic:1.1.2'
+        testCompile 'junit:junit:4.12'
+        testCompile 'org.hamcrest:hamcrest-library:1.3'
+        testCompile 'org.mockito:mockito-core:1.10.19'
+        testCompile 'org.spockframework:spock-core:1.0-groovy-2.4'
+        testCompile 'cglib:cglib-nodep:3.1'
     }
 
     repositories {
         mavenCentral()
+        mavenLocal()
+        jcenter()
+    }
+
+    jacocoTestReport {
+        reports {
+            xml.enabled = true // coveralls plugin depends on xml format report
+            html.enabled = true
+        }
     }
 }
 
-task copyArtifacts(type: Sync, dependsOn: ['jadx-cli:installApp', 'jadx-gui:installApp']) {
+/* Sonar runner configuration */
+repositories {
+    mavenCentral()
+}
+sonarRunner {
+    toolVersion = '2.4'
+}
+
+task copyArtifacts(type: Sync, dependsOn: ['jadx-cli:installDist', 'jadx-gui:installDist']) {
     destinationDir file("$buildDir/jadx")
     ['jadx-cli', 'jadx-gui'].each {
-        from tasks.getByPath(":${it}:installApp").destinationDir
+        from tasks.getByPath(":${it}:installDist").destinationDir
     }
 }
 
@@ -61,13 +93,20 @@ task dist(dependsOn: pack) {
 task samples(dependsOn: 'jadx-samples:samples') {
 }
 
-task build(dependsOn: [dist, samples]) {
+task testAppCheck(dependsOn: 'jadx-test-app:testAppCheck') {
 }
 
-task clean(type: Delete) {
+task pitest(overwrite: true, dependsOn: 'jadx-core:pitest') {
+}
+
+task cleanBuildDir(type: Delete) {
     delete buildDir
 }
 
+build.dependsOn(dist, samples)
+
+clean.dependsOn(cleanBuildDir)
+
 task wrapper(type: Wrapper) {
-    gradleVersion = '1.11'
+    gradleVersion = '2.7'
 }

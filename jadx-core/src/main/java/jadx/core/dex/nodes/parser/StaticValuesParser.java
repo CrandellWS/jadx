@@ -6,12 +6,12 @@ import jadx.core.utils.exceptions.DecodeException;
 
 import java.util.List;
 
-import com.android.dex.Dex;
+import com.android.dex.Dex.Section;
 import com.android.dex.Leb128;
 
 public class StaticValuesParser extends EncValueParser {
 
-	public StaticValuesParser(DexNode dex, Dex.Section in) {
+	public StaticValuesParser(DexNode dex, Section in) {
 		super(dex, in);
 	}
 
@@ -19,7 +19,9 @@ public class StaticValuesParser extends EncValueParser {
 		int count = Leb128.readUnsignedLeb128(in);
 		for (int i = 0; i < count; i++) {
 			Object value = parseValue();
-			fields.get(i).getAttributes().add(new FieldValueAttr(value));
+			if (i < fields.size()) {
+				fields.get(i).addAttr(FieldInitAttr.constValue(value));
+			}
 		}
 		return count;
 	}

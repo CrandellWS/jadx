@@ -1,56 +1,61 @@
 package jadx.gui.ui;
 
-import jadx.gui.treemodel.JClass;
+import jadx.gui.treemodel.JNode;
 import jadx.gui.utils.Utils;
 
 import javax.swing.AbstractAction;
-import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.KeyStroke;
 import java.awt.BorderLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 
-import org.fife.ui.rtextarea.RTextScrollPane;
-
-class CodePanel extends JPanel {
+class CodePanel extends ContentPanel {
 
 	private static final long serialVersionUID = 5310536092010045565L;
 
-	private final TabbedPane codePanel;
-	private final JClass jClass;
 	private final SearchBar searchBar;
 	private final CodeArea codeArea;
-	private final RTextScrollPane scrollPane;
+	private final JScrollPane scrollPane;
 
-	CodePanel(TabbedPane panel, JClass cls) {
-		codePanel = panel;
-		jClass = cls;
+	CodePanel(TabbedPane panel, JNode jnode) {
+		super(panel, jnode);
+
 		codeArea = new CodeArea(this);
 		searchBar = new SearchBar(codeArea);
 
-		scrollPane = new RTextScrollPane(codeArea);
-		scrollPane.setFoldIndicatorEnabled(true);
+		scrollPane = new JScrollPane(codeArea);
+		scrollPane.setRowHeaderView(new LineNumbers(codeArea));
 
 		setLayout(new BorderLayout());
 		add(searchBar, BorderLayout.NORTH);
 		add(scrollPane);
 
 		KeyStroke key = KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_MASK);
-		Utils.addKeyBinding(codeArea, key, "SearchAction", new AbstractAction() {
-			@Override
-			public void actionPerformed(ActionEvent e) {
-				searchBar.toggle();
-			}
-		});
+		Utils.addKeyBinding(codeArea, key, "SearchAction", new SearchAction());
 	}
 
-	TabbedPane getCodePanel() {
-		return codePanel;
+	private class SearchAction extends AbstractAction {
+		private static final long serialVersionUID = 8650568214755387093L;
+
+		@Override
+		public void actionPerformed(ActionEvent e) {
+			searchBar.toggle();
+		}
 	}
 
-	JClass getCls() {
-		return jClass;
+	@Override
+	public void loadSettings() {
+		codeArea.loadSettings();
+	}
+
+	TabbedPane getTabbedPane() {
+		return tabbedPane;
+	}
+
+	JNode getNode() {
+		return node;
 	}
 
 	SearchBar getSearchBar() {
@@ -61,7 +66,7 @@ class CodePanel extends JPanel {
 		return codeArea;
 	}
 
-	RTextScrollPane getScrollPane() {
+	JScrollPane getScrollPane() {
 		return scrollPane;
 	}
 }

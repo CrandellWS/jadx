@@ -5,18 +5,8 @@ applicationName = 'jadx'
 
 dependencies {
     compile(project(':jadx-core'))
-    compile 'com.beust:jcommander:1.30'
-    compile 'ch.qos.logback:logback-classic:1.1.1'
-}
-
-startScripts {
-    doLast {
-        // increase default max heap size
-        String var = 'DEFAULT_JVM_OPTS='
-        String args = '-Xmx1300M'
-        unixScript.text = unixScript.text.replace(var + '""', var + '"' + args + '"')
-        windowsScript.text = windowsScript.text.replace(var, var + args)
-    }
+    compile 'com.beust:jcommander:1.47'
+    compile 'ch.qos.logback:logback-classic:1.1.2'
 }
 
 applicationDistribution.with {
@@ -24,6 +14,7 @@ applicationDistribution.with {
         from '../.'
         include 'README.md'
         include 'NOTICE'
+        include 'LICENSE'
     }
 }
 

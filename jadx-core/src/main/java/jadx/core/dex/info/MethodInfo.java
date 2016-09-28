@@ -17,16 +17,32 @@ public final class MethodInfo {
 	private final List<ArgType> args;
 	private final ClassInfo declClass;
 	private final String shortId;
+	private String alias;
+	private boolean aliasFromPreset;
 
 	private MethodInfo(DexNode dex, int mthIndex) {
 		MethodId mthId = dex.getMethodId(mthIndex);
 		name = dex.getString(mthId.getNameIndex());
+		alias = name;
+		aliasFromPreset = false;
 		declClass = ClassInfo.fromDex(dex, mthId.getDeclaringClassIndex());
 
 		ProtoId proto = dex.getProtoId(mthId.getProtoIndex());
 		retType = dex.getType(proto.getReturnTypeIndex());
 		args = dex.readParamList(proto.getParametersOffset());
+		shortId = makeSignature(true);
+	}
 
+	public static MethodInfo fromDex(DexNode dex, int mthIndex) {
+		MethodInfo mth = dex.getInfoStorage().getMethod(mthIndex);
+		if (mth != null) {
+			return mth;
+		}
+		mth = new MethodInfo(dex, mthIndex);
+		return dex.getInfoStorage().putMethod(mthIndex, mth);
+	}
+
+	public String makeSignature(boolean includeRetType) {
 		StringBuilder signature = new StringBuilder();
 		signature.append(name);
 		signature.append('(');
@@ -34,13 +50,10 @@ public final class MethodInfo {
 			signature.append(TypeGen.signature(arg));
 		}
 		signature.append(')');
-		signature.append(TypeGen.signature(retType));
-
-		shortId = signature.toString();
-	}
-
-	public static MethodInfo fromDex(DexNode dex, int mthIndex) {
-		return new MethodInfo(dex, mthIndex);
+		if (includeRetType) {
+			signature.append(TypeGen.signature(retType));
+		}
+		return signature.toString();
 	}
 
 	public String getName() {
@@ -86,6 +99,26 @@ public final class MethodInfo {
 		return name.equals("<clinit>");
 	}
 
+	public String getAlias() {
+		return alias;
+	}
+
+	public void setAlias(String alias) {
+		this.alias = alias;
+	}
+
+	public boolean isRenamed() {
+		return !name.equals(alias);
+	}
+
+	public boolean isAliasFromPreset() {
+		return aliasFromPreset;
+	}
+
+	public void setAliasFromPreset(boolean value) {
+		aliasFromPreset = value;
+	}
+
 	@Override
 	public int hashCode() {
 		int result = declClass.hashCode();
@@ -99,23 +132,13 @@ public final class MethodInfo {
 		if (this == obj) {
 			return true;
 		}
-		if (obj == null) {
-			return false;
-		}
-		if (getClass() != obj.getClass()) {
+		if (!(obj instanceof MethodInfo)) {
 			return false;
 		}
 		MethodInfo other = (MethodInfo) obj;
-		if (!shortId.equals(other.shortId)) {
-			return false;
-		}
-		if (!retType.equals(other.retType)) {
-			return false;
-		}
-		if (!declClass.equals(other.declClass)) {
-			return false;
-		}
-		return true;
+		return shortId.equals(other.shortId)
+				&& retType.equals(other.retType)
+				&& declClass.equals(other.declClass);
 	}
 
 	@Override

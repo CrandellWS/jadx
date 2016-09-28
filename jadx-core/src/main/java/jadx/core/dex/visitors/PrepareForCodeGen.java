@@ -1,6 +1,6 @@
 package jadx.core.dex.visitors;
 
-import jadx.core.dex.attributes.AttributeFlag;
+import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.instructions.ArithNode;
 import jadx.core.dex.instructions.ArithOp;
 import jadx.core.dex.instructions.InsnType;
@@ -21,6 +21,11 @@ import java.util.List;
  * most of this modification breaks register dependencies,
  * so this pass must be just before CodeGen.
  */
+@JadxVisitor(
+		name = "PrepareForCodeGen",
+		desc = "Prepare instructions for code generation pass",
+		runAfter = {CodeShrinker.class, ClassModifier.class}
+)
 public class PrepareForCodeGen extends AbstractVisitor {
 
 	@Override
@@ -32,7 +37,7 @@ public class PrepareForCodeGen extends AbstractVisitor {
 		for (BlockNode block : blocks) {
 			removeInstructions(block);
 			checkInline(block);
-			removeParenthesis(block);
+//			removeParenthesis(block);
 			modifyArith(block);
 		}
 	}
@@ -45,12 +50,23 @@ public class PrepareForCodeGen extends AbstractVisitor {
 				case NOP:
 				case MONITOR_ENTER:
 				case MONITOR_EXIT:
+				case MOVE_EXCEPTION:
 					it.remove();
 					break;
 
 				case CONSTRUCTOR:
 					ConstructorInsn co = (ConstructorInsn) insn;
 					if (co.isSelf()) {
+						it.remove();
+					}
+					break;
+
+				case MOVE:
+					// remove redundant moves:
+					//   unused result and same args names (a = a;)
+					RegisterArg result = insn.getResult();
+					if (result.getSVar().getUseCount() == 0
+							&& result.isNameEquals(insn.getArg(0))) {
 						it.remove();
 					}
 					break;
@@ -64,10 +80,10 @@ public class PrepareForCodeGen extends AbstractVisitor {
 			InsnNode insn = list.get(i);
 			// replace 'move' with inner wrapped instruction
 			if (insn.getType() == InsnType.MOVE
-					&& insn.getArg(0).isInsnWrap()
-					&& !insn.getAttributes().contains(AttributeFlag.DECLARE_VAR)) {
-				InsnNode wrapInsn = ((InsnWrapArg)insn.getArg(0)).getWrapInsn();
+					&& insn.getArg(0).isInsnWrap()) {
+				InsnNode wrapInsn = ((InsnWrapArg) insn.getArg(0)).getWrapInsn();
 				wrapInsn.setResult(insn.getResult());
+				wrapInsn.copyAttributesFrom(insn);
 				list.set(i, wrapInsn);
 			}
 		}
@@ -92,7 +108,7 @@ public class PrepareForCodeGen extends AbstractVisitor {
 					InsnArg arg = arith.getArg(i);
 					if (arg.isInsnWrap()) {
 						InsnNode wrapInsn = ((InsnWrapArg) arg).getWrapInsn();
-						wrapInsn.getAttributes().add(AttributeFlag.DONT_WRAP);
+						wrapInsn.add(AFlag.DONT_WRAP);
 						checkInsn(wrapInsn);
 					}
 				}
@@ -113,15 +129,19 @@ public class PrepareForCodeGen extends AbstractVisitor {
 	 */
 	private static void modifyArith(BlockNode block) {
 		List<InsnNode> list = block.getInstructions();
-		for (int i = 0; i < list.size(); i++) {
-			InsnNode insn = list.get(i);
+		for (InsnNode insn : list) {
 			if (insn.getType() == InsnType.ARITH) {
-				ArithNode arith = (ArithNode) insn;
-				RegisterArg res = arith.getResult();
-				InsnArg arg = arith.getArg(0);
+				RegisterArg res = insn.getResult();
+				InsnArg arg = insn.getArg(0);
+				boolean replace = false;
 				if (res.equals(arg)) {
-					ArithNode newArith = new ArithNode(arith.getOp(), res, arith.getArg(1));
-					list.set(i, newArith);
+					replace = true;
+				} else if (arg.isRegister()) {
+					RegisterArg regArg = (RegisterArg) arg;
+					replace = res.equalRegisterAndType(regArg);
+				}
+				if (replace) {
+					insn.add(AFlag.ARITH_ONEARG);
 				}
 			}
 		}

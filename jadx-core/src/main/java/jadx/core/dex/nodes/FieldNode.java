@@ -1,6 +1,6 @@
 package jadx.core.dex.nodes;
 
-import jadx.core.dex.attributes.LineAttrNode;
+import jadx.core.dex.attributes.nodes.LineAttrNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.AccessInfo.AFType;
 import jadx.core.dex.info.FieldInfo;
@@ -17,10 +17,15 @@ public class FieldNode extends LineAttrNode {
 	private ArgType type; // store signature
 
 	public FieldNode(ClassNode cls, Field field) {
+		this(cls, FieldInfo.fromDex(cls.dex(), field.getFieldIndex()),
+				field.getAccessFlags());
+	}
+
+	public FieldNode(ClassNode cls, FieldInfo fieldInfo, int accessFlags) {
 		this.parent = cls;
-		this.fieldInfo = FieldInfo.fromDex(cls.dex(), field.getFieldIndex());
+		this.fieldInfo = fieldInfo;
 		this.type = fieldInfo.getType();
-		this.accFlags = new AccessInfo(field.getAccessFlags(), AFType.FIELD);
+		this.accFlags = new AccessInfo(accessFlags, AFType.FIELD);
 	}
 
 	public FieldInfo getFieldInfo() {
@@ -33,6 +38,10 @@ public class FieldNode extends LineAttrNode {
 
 	public String getName() {
 		return fieldInfo.getName();
+	}
+
+	public String getAlias() {
+		return fieldInfo.getAlias();
 	}
 
 	public ArgType getType() {

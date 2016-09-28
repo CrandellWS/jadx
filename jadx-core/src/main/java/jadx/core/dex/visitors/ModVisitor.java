@@ -1,19 +1,29 @@
 package jadx.core.dex.visitors;
 
+import jadx.core.codegen.TypeGen;
 import jadx.core.deobf.NameMapper;
-import jadx.core.dex.attributes.AttributeType;
+import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.FieldReplaceAttr;
+import jadx.core.dex.info.ClassInfo;
+import jadx.core.dex.info.FieldInfo;
 import jadx.core.dex.info.MethodInfo;
+import jadx.core.dex.instructions.ArithNode;
 import jadx.core.dex.instructions.ConstClassNode;
 import jadx.core.dex.instructions.ConstStringNode;
 import jadx.core.dex.instructions.FillArrayNode;
+import jadx.core.dex.instructions.FilledNewArrayNode;
 import jadx.core.dex.instructions.IndexInsnNode;
 import jadx.core.dex.instructions.InsnType;
 import jadx.core.dex.instructions.InvokeNode;
+import jadx.core.dex.instructions.NewArrayNode;
 import jadx.core.dex.instructions.SwitchNode;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.instructions.args.InsnArg;
 import jadx.core.dex.instructions.args.LiteralArg;
+import jadx.core.dex.instructions.args.NamedArg;
 import jadx.core.dex.instructions.args.RegisterArg;
+import jadx.core.dex.instructions.args.SSAVar;
 import jadx.core.dex.instructions.mods.ConstructorInsn;
 import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.ClassNode;
@@ -22,9 +32,16 @@ import jadx.core.dex.nodes.InsnNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.trycatch.ExcHandlerAttr;
 import jadx.core.dex.trycatch.ExceptionHandler;
+import jadx.core.utils.ErrorsCounter;
+import jadx.core.utils.InsnUtils;
 import jadx.core.utils.InstructionRemover;
+import jadx.core.utils.exceptions.JadxRuntimeException;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +50,11 @@ import org.slf4j.LoggerFactory;
  * Visitor for modify method instructions
  * (remove, replace, process exception handlers)
  */
+@JadxVisitor(
+		name = "ModVisitor",
+		desc = "Modify method instructions",
+		runBefore = CodeShrinker.class
+)
 public class ModVisitor extends AbstractVisitor {
 	private static final Logger LOG = LoggerFactory.getLogger(ModVisitor.class);
 
@@ -41,58 +63,24 @@ public class ModVisitor extends AbstractVisitor {
 		if (mth.isNoCode()) {
 			return;
 		}
-		removeStep(mth);
-		replaceStep(mth);
+
+		InstructionRemover remover = new InstructionRemover(mth);
+		replaceStep(mth, remover);
+		removeStep(mth, remover);
 
 		checkArgsNames(mth);
-
-		for (BlockNode block : mth.getBasicBlocks()) {
-			processExceptionHander(mth, block);
-		}
 	}
 
-	private static void replaceStep(MethodNode mth) {
+	private static void replaceStep(MethodNode mth, InstructionRemover remover) {
 		ClassNode parentClass = mth.getParentClass();
 		for (BlockNode block : mth.getBasicBlocks()) {
-			InstructionRemover remover = new InstructionRemover(block.getInstructions());
-
+			remover.setBlock(block);
 			int size = block.getInstructions().size();
 			for (int i = 0; i < size; i++) {
 				InsnNode insn = block.getInstructions().get(i);
 				switch (insn.getType()) {
 					case INVOKE:
-						InvokeNode inv = (InvokeNode) insn;
-						MethodInfo callMth = inv.getCallMth();
-						if (callMth.isConstructor()) {
-							ConstructorInsn co = new ConstructorInsn(mth, inv);
-							boolean remove = false;
-							if (co.isSuper() && (co.getArgsCount() == 0 || parentClass.isEnum())) {
-								remove = true;
-							} else if (co.isThis() && co.getArgsCount() == 0) {
-								MethodNode defCo = mth.getParentClass().searchMethodByName(callMth.getShortId());
-								if (defCo == null || defCo.isNoCode()) {
-									// default constructor not implemented
-									remove = true;
-								}
-							}
-							if (remove) {
-								remover.add(insn);
-							} else {
-								replaceInsn(block, i, co);
-							}
-						} else {
-							if (inv.getArgsCount() > 0) {
-								for (int j = 0; j < inv.getArgsCount(); j++) {
-									InsnArg arg = inv.getArg(j);
-									if (arg.isLiteral()) {
-										FieldNode f = parentClass.getConstFieldByLiteralArg((LiteralArg) arg);
-										if (f != null) {
-											arg.wrapInstruction(new IndexInsnNode(InsnType.SGET, f.getFieldInfo(), 0));
-										}
-									}
-								}
-							}
-						}
+						processInvoke(mth, block, i, remover);
 						break;
 
 					case CONST:
@@ -121,17 +109,44 @@ public class ModVisitor extends AbstractVisitor {
 						for (int k = 0; k < sn.getCasesCount(); k++) {
 							FieldNode f = parentClass.getConstField(sn.getKeys()[k]);
 							if (f != null) {
-								sn.getKeys()[k] = new IndexInsnNode(InsnType.SGET, f.getFieldInfo(), 0);
+								sn.getKeys()[k] = f;
 							}
 						}
 						break;
 
-					case RETURN:
-						if (insn.getArgsCount() > 0 && insn.getArg(0).isLiteral()) {
-							LiteralArg arg = (LiteralArg) insn.getArg(0);
-							FieldNode f = parentClass.getConstFieldByLiteralArg(arg);
-							if (f != null) {
-								arg.wrapInstruction(new IndexInsnNode(InsnType.SGET, f.getFieldInfo(), 0));
+					case NEW_ARRAY:
+						// create array in 'fill-array' instruction
+						int next = i + 1;
+						if (next < size) {
+							InsnNode ni = block.getInstructions().get(next);
+							if (ni.getType() == InsnType.FILL_ARRAY) {
+								ni.getResult().merge(mth.dex(), insn.getResult());
+								ArgType arrType = ((NewArrayNode) insn).getArrayType();
+								((FillArrayNode) ni).mergeElementType(mth.dex(), arrType.getArrayElement());
+								remover.add(insn);
+							}
+						}
+						break;
+
+					case FILL_ARRAY:
+						InsnNode filledArr = makeFilledArrayInsn(mth, (FillArrayNode) insn);
+						replaceInsn(block, i, filledArr);
+						break;
+
+					case MOVE_EXCEPTION:
+						processMoveException(mth, block, insn, remover);
+						break;
+
+					case ARITH:
+						ArithNode arithNode = (ArithNode) insn;
+						if (arithNode.getArgsCount() == 2) {
+							InsnArg litArg = arithNode.getArg(1);
+							if (litArg.isLiteral()) {
+								FieldNode f = parentClass.getConstFieldByLiteralArg((LiteralArg) litArg);
+								if (f != null) {
+									InsnNode fGet = new IndexInsnNode(InsnType.SGET, f.getFieldInfo(), 0);
+									insn.replaceArg(litArg, InsnArg.wrapArg(fGet));
+								}
 							}
 						}
 						break;
@@ -147,42 +162,15 @@ public class ModVisitor extends AbstractVisitor {
 	/**
 	 * Remove unnecessary instructions
 	 */
-	private static void removeStep(MethodNode mth) {
+	private static void removeStep(MethodNode mth, InstructionRemover remover) {
 		for (BlockNode block : mth.getBasicBlocks()) {
-			InstructionRemover remover = new InstructionRemover(block.getInstructions());
-
-			int size = block.getInstructions().size();
-			for (int i = 0; i < size; i++) {
-				InsnNode insn = block.getInstructions().get(i);
-
+			remover.setBlock(block);
+			for (InsnNode insn : block.getInstructions()) {
 				switch (insn.getType()) {
 					case NOP:
 					case GOTO:
 					case NEW_INSTANCE:
 						remover.add(insn);
-						break;
-
-					case NEW_ARRAY:
-						// create array in 'fill-array' instruction
-						int next = i + 1;
-						if (next < size) {
-							InsnNode ni = block.getInstructions().get(next);
-							if (ni.getType() == InsnType.FILL_ARRAY) {
-								ni.getResult().merge(insn.getResult());
-								((FillArrayNode) ni).mergeElementType(insn.getResult().getType().getArrayElement());
-								remover.add(insn);
-							}
-						}
-						break;
-
-					case RETURN:
-						if (insn.getArgsCount() == 0) {
-							if (mth.getBasicBlocks().size() == 1 && i == size - 1) {
-								remover.add(insn);
-							} else if (mth.getMethodInfo().isClassInit()) {
-								remover.add(insn);
-							}
-						}
 						break;
 
 					default:
@@ -193,52 +181,281 @@ public class ModVisitor extends AbstractVisitor {
 		}
 	}
 
-	private static void processExceptionHander(MethodNode mth, BlockNode block) {
-		ExcHandlerAttr handlerAttr = (ExcHandlerAttr) block.getAttributes().get(AttributeType.EXC_HANDLER);
-		if (handlerAttr == null) {
+	private static void processInvoke(MethodNode mth, BlockNode block, int insnNumber, InstructionRemover remover) {
+		ClassNode parentClass = mth.getParentClass();
+		InsnNode insn = block.getInstructions().get(insnNumber);
+		InvokeNode inv = (InvokeNode) insn;
+		MethodInfo callMth = inv.getCallMth();
+		if (!callMth.isConstructor()) {
 			return;
 		}
-		ExceptionHandler excHandler = handlerAttr.getHandler();
-		boolean noExitNode = true; // check if handler has exit edge to block not from this handler
-		for (BlockNode excBlock : excHandler.getBlocks()) {
-			if (noExitNode) {
-				noExitNode = excHandler.getBlocks().containsAll(excBlock.getCleanSuccessors());
+		InsnNode instArgAssignInsn = ((RegisterArg) inv.getArg(0)).getAssignInsn();
+		ConstructorInsn co = new ConstructorInsn(mth, inv);
+		boolean remove = false;
+		if (co.isSuper() && (co.getArgsCount() == 0 || parentClass.isEnum())) {
+			remove = true;
+		} else if (co.isThis() && co.getArgsCount() == 0) {
+			MethodNode defCo = parentClass.searchMethodByName(callMth.getShortId());
+			if (defCo == null || defCo.isNoCode()) {
+				// default constructor not implemented
+				remove = true;
 			}
-
-			List<InsnNode> insns = excBlock.getInstructions();
-			int size = insns.size();
-			if (excHandler.isCatchAll()
-					&& size > 0
-					&& insns.get(size - 1).getType() == InsnType.THROW) {
-
-				InstructionRemover.remove(excBlock, size - 1);
-
-				// move not removed instructions to 'finally' block
-				if (insns.size() != 0) {
-					// TODO: support instructions from several blocks
-					// tryBlock.setFinalBlockFromInsns(mth, insns);
-					// TODO: because of incomplete realization don't extract final block,
-					// just remove unnecessary instructions
-					insns.clear();
+		}
+		// remove super() call in instance initializer
+		if (parentClass.isAnonymous() && mth.isDefaultConstructor() && co.isSuper()) {
+			remove = true;
+		}
+		if (remove) {
+			remover.add(insn);
+			return;
+		}
+		if (co.isNewInstance()) {
+			InsnNode newInstInsn = removeAssignChain(instArgAssignInsn, remover, InsnType.NEW_INSTANCE);
+			if (newInstInsn != null) {
+				RegisterArg instArg = newInstInsn.getResult();
+				RegisterArg resultArg = co.getResult();
+				if (!resultArg.equals(instArg)) {
+					// replace all usages of 'instArg' with result of this constructor instruction
+					for (RegisterArg useArg : new ArrayList<RegisterArg>(instArg.getSVar().getUseList())) {
+						RegisterArg dup = resultArg.duplicate();
+						InsnNode parentInsn = useArg.getParentInsn();
+						parentInsn.replaceArg(useArg, dup);
+						dup.setParentInsn(parentInsn);
+						resultArg.getSVar().use(dup);
+					}
 				}
 			}
 		}
+		ConstructorInsn replace = processConstructor(mth, co);
+		if (replace != null) {
+			co = replace;
+		}
+		replaceInsn(block, insnNumber, co);
 
-		List<InsnNode> blockInsns = block.getInstructions();
-		if (blockInsns.size() > 0) {
-			InsnNode insn = blockInsns.get(0);
-			if (insn.getType() == InsnType.MOVE_EXCEPTION
-					&& insn.getResult().getTypedVar().getUseList().size() <= 1) {
-				InstructionRemover.remove(block, 0);
+		processAnonymousConstructor(mth, co);
+	}
+
+	private static void processAnonymousConstructor(MethodNode mth, ConstructorInsn co) {
+		MethodInfo callMth = co.getCallMth();
+		MethodNode callMthNode = mth.dex().resolveMethod(callMth);
+		if (callMthNode == null) {
+			return;
+		}
+		ClassNode classNode = callMthNode.getParentClass();
+		ClassInfo classInfo = classNode.getClassInfo();
+		ClassNode parentClass = mth.getParentClass();
+		if (!classInfo.isInner()
+				|| !Character.isDigit(classInfo.getShortName().charAt(0))
+				|| !parentClass.getInnerClasses().contains(classNode)) {
+			return;
+		}
+		if (!classNode.getAccessFlags().isStatic()
+				&& (callMth.getArgsCount() == 0
+				|| !callMth.getArgumentsTypes().get(0).equals(parentClass.getClassInfo().getType()))) {
+			return;
+		}
+		// TODO: calculate this constructor and other constructor usage
+		Map<InsnArg, FieldNode> argsMap = getArgsToFieldsMapping(callMthNode, co);
+		if (argsMap.isEmpty()) {
+			return;
+		}
+
+		// all checks passed
+		classNode.add(AFlag.ANONYMOUS_CLASS);
+		callMthNode.add(AFlag.DONT_GENERATE);
+		for (Map.Entry<InsnArg, FieldNode> entry : argsMap.entrySet()) {
+			FieldNode field = entry.getValue();
+			if (field == null) {
+				continue;
+			}
+			InsnArg arg = entry.getKey();
+			field.addAttr(new FieldReplaceAttr(arg));
+			field.add(AFlag.DONT_GENERATE);
+			if (arg.isRegister()) {
+				RegisterArg reg = (RegisterArg) arg;
+				SSAVar sVar = reg.getSVar();
+				if (sVar != null) {
+					sVar.add(AFlag.FINAL);
+					sVar.add(AFlag.DONT_INLINE);
+				}
+				reg.add(AFlag.SKIP_ARG);
 			}
 		}
+	}
 
-		int totalSize = 0;
-		for (BlockNode excBlock : excHandler.getBlocks()) {
-			totalSize += excBlock.getInstructions().size();
+	private static Map<InsnArg, FieldNode> getArgsToFieldsMapping(MethodNode callMthNode, ConstructorInsn co) {
+		Map<InsnArg, FieldNode> map = new LinkedHashMap<InsnArg, FieldNode>();
+		ClassNode parentClass = callMthNode.getParentClass();
+		List<RegisterArg> argList = callMthNode.getArguments(false);
+		int startArg = parentClass.getAccessFlags().isStatic() ? 0 : 1;
+		int argsCount = argList.size();
+		for (int i = startArg; i < argsCount; i++) {
+			RegisterArg arg = argList.get(i);
+			InsnNode useInsn = getParentInsnSkipMove(arg);
+			if (useInsn == null) {
+				return Collections.emptyMap();
+			}
+			FieldNode fieldNode = null;
+			if (useInsn.getType() == InsnType.IPUT) {
+				FieldInfo field = (FieldInfo) ((IndexInsnNode) useInsn).getIndex();
+				fieldNode = parentClass.searchField(field);
+				if (fieldNode == null || !fieldNode.getAccessFlags().isSynthetic()) {
+					return Collections.emptyMap();
+				}
+			} else if (useInsn.getType() == InsnType.CONSTRUCTOR) {
+				ConstructorInsn superConstr = (ConstructorInsn) useInsn;
+				if (!superConstr.isSuper()) {
+					return Collections.emptyMap();
+				}
+			} else {
+				return Collections.emptyMap();
+			}
+			map.put(co.getArg(i), fieldNode);
 		}
-		if (totalSize == 0 && noExitNode) {
-			handlerAttr.getTryBlock().removeHandler(mth, excHandler);
+		return map;
+	}
+
+	private static InsnNode getParentInsnSkipMove(RegisterArg arg) {
+		SSAVar sVar = arg.getSVar();
+		if (sVar.getUseCount() != 1) {
+			return null;
+		}
+		RegisterArg useArg = sVar.getUseList().get(0);
+		InsnNode parentInsn = useArg.getParentInsn();
+		if (parentInsn == null) {
+			return null;
+		}
+		if (parentInsn.getType() == InsnType.MOVE) {
+			return getParentInsnSkipMove(parentInsn.getResult());
+		}
+		return parentInsn;
+	}
+
+	/**
+	 * Replace call of synthetic constructor
+	 */
+	private static ConstructorInsn processConstructor(MethodNode mth, ConstructorInsn co) {
+		MethodNode callMth = mth.dex().resolveMethod(co.getCallMth());
+		if (callMth == null
+				|| !callMth.getAccessFlags().isSynthetic()
+				|| !allArgsNull(co)) {
+			return null;
+		}
+		ClassNode classNode = mth.dex().resolveClass(callMth.getParentClass().getClassInfo());
+		if (classNode == null) {
+			return null;
+		}
+		boolean passThis = co.getArgsCount() >= 1 && co.getArg(0).isThis();
+		String ctrId = "<init>(" + (passThis ? TypeGen.signature(co.getArg(0).getType()) : "") + ")V";
+		MethodNode defCtr = classNode.searchMethodByName(ctrId);
+		if (defCtr == null) {
+			return null;
+		}
+		ConstructorInsn newInsn = new ConstructorInsn(defCtr.getMethodInfo(), co.getCallType(), co.getInstanceArg());
+		newInsn.setResult(co.getResult());
+		return newInsn;
+	}
+
+	private static InsnNode makeFilledArrayInsn(MethodNode mth, FillArrayNode insn) {
+		ArgType insnArrayType = insn.getResult().getType();
+		ArgType insnElementType = insnArrayType.getArrayElement();
+		ArgType elType = insn.getElementType();
+		if (!elType.isTypeKnown() && insnElementType.isPrimitive()) {
+			if (elType.contains(insnElementType.getPrimitiveType())) {
+				elType = insnElementType;
+			}
+		}
+		if (!elType.equals(insnElementType) && !insnArrayType.equals(ArgType.OBJECT)) {
+			ErrorsCounter.methodError(mth,
+					"Incorrect type for fill-array insn " + InsnUtils.formatOffset(insn.getOffset())
+							+ ", element type: " + elType + ", insn element type: " + insnElementType
+			);
+		}
+		if (!elType.isTypeKnown()) {
+			LOG.warn("Unknown array element type: {} in mth: {}", elType, mth);
+			elType = insnElementType.isTypeKnown() ? insnElementType : elType.selectFirst();
+			if (elType == null) {
+				throw new JadxRuntimeException("Null array element type");
+			}
+		}
+		insn.mergeElementType(mth.dex(), elType);
+		elType = insn.getElementType();
+
+		List<LiteralArg> list = insn.getLiteralArgs();
+		InsnNode filledArr = new FilledNewArrayNode(elType, list.size());
+		filledArr.setResult(insn.getResult());
+		for (LiteralArg arg : list) {
+			FieldNode f = mth.getParentClass().getConstFieldByLiteralArg(arg);
+			if (f != null) {
+				InsnNode fGet = new IndexInsnNode(InsnType.SGET, f.getFieldInfo(), 0);
+				filledArr.addArg(InsnArg.wrapArg(fGet));
+			} else {
+				filledArr.addArg(arg);
+			}
+		}
+		return filledArr;
+	}
+
+	private static boolean allArgsNull(InsnNode insn) {
+		for (InsnArg insnArg : insn.getArguments()) {
+			if (insnArg.isLiteral()) {
+				LiteralArg lit = (LiteralArg) insnArg;
+				if (lit.getLiteral() != 0) {
+					return false;
+				}
+			} else if (!insnArg.isThis()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Remove instructions on 'move' chain until instruction with type 'insnType'
+	 */
+	private static InsnNode removeAssignChain(InsnNode insn, InstructionRemover remover, InsnType insnType) {
+		if (insn == null) {
+			return null;
+		}
+		remover.add(insn);
+		InsnType type = insn.getType();
+		if (type == insnType) {
+			return insn;
+		}
+		if (type == InsnType.MOVE) {
+			RegisterArg arg = (RegisterArg) insn.getArg(0);
+			return removeAssignChain(arg.getAssignInsn(), remover, insnType);
+		}
+		return null;
+	}
+
+	private static void processMoveException(MethodNode mth, BlockNode block, InsnNode insn,
+			InstructionRemover remover) {
+		ExcHandlerAttr excHandlerAttr = block.get(AType.EXC_HANDLER);
+		if (excHandlerAttr == null) {
+			return;
+		}
+		ExceptionHandler excHandler = excHandlerAttr.getHandler();
+
+		// result arg used both in this insn and exception handler,
+		RegisterArg resArg = insn.getResult();
+		ArgType type = excHandler.isCatchAll() ? ArgType.THROWABLE : excHandler.getCatchType().getType();
+		String name = excHandler.isCatchAll() ? "th" : "e";
+		if (resArg.getName() == null) {
+			resArg.setName(name);
+		}
+		SSAVar sVar = insn.getResult().getSVar();
+		if (sVar.getUseCount() == 0) {
+			excHandler.setArg(new NamedArg(name, type));
+			remover.add(insn);
+		} else if (sVar.isUsedInPhi()) {
+			// exception var moved to external variable => replace with 'move' insn
+			InsnNode moveInsn = new InsnNode(InsnType.MOVE, 1);
+			moveInsn.setResult(insn.getResult());
+			NamedArg namedArg = new NamedArg(name, type);
+			moveInsn.addArg(namedArg);
+			excHandler.setArg(namedArg);
+			replaceInsn(block, 0, moveInsn);
 		}
 	}
 
@@ -248,16 +465,17 @@ public class ModVisitor extends AbstractVisitor {
 	 */
 	private static void replaceInsn(BlockNode block, int i, InsnNode insn) {
 		InsnNode prevInsn = block.getInstructions().get(i);
-		insn.getAttributes().addAll(prevInsn.getAttributes());
+		insn.copyAttributesFrom(prevInsn);
+		insn.setSourceLine(prevInsn.getSourceLine());
 		block.getInstructions().set(i, insn);
 	}
 
 	private static void checkArgsNames(MethodNode mth) {
 		for (RegisterArg arg : mth.getArguments(false)) {
-			String name = arg.getTypedVar().getName();
+			String name = arg.getName();
 			if (name != null && NameMapper.isReserved(name)) {
 				name = name + "_";
-				arg.getTypedVar().setName(name);
+				arg.getSVar().setName(name);
 			}
 		}
 	}

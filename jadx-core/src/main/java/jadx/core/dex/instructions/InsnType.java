@@ -1,7 +1,6 @@
 package jadx.core.dex.instructions;
 
 public enum InsnType {
-	NOP, // replacement for removed instructions
 
 	CONST,
 	CONST_STR,
@@ -48,16 +47,27 @@ public enum InsnType {
 
 	INVOKE,
 
-	// additional instructions
+	// *** Additional instructions ***
+
+	// replacement for removed instructions
+	NOP,
+
+	TERNARY,
 	CONSTRUCTOR,
+
 	BREAK,
 	CONTINUE,
 
-	STR_CONCAT, // strings concatenation
-	ARITH_ONEARG,
+	// strings concatenation
+	STR_CONCAT,
 
-	TERNARY,
-	ARGS, // just generate arguments
+	// just generate one argument
+	ONE_ARG,
+	PHI,
 
-	NEW_MULTIDIM_ARRAY // TODO: now multidimensional arrays created using Array.newInstance function
+	// merge all arguments in one
+	MERGE,
+
+	// TODO: now multidimensional arrays created using Array.newInstance function
+	NEW_MULTIDIM_ARRAY
 }
